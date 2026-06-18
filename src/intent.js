@@ -89,7 +89,7 @@ async function handleEscalar({ phone, name, history, instance }) {
     .map((m) => `[${m.role === "user" ? name : "Antonela"}] ${m.content}`)
     .join("\n");
 
-  await pauseBot({ phone, instance });
+  await pauseBot({ phone });
   await clearHistory(phone);
 
   await notifyTeam({

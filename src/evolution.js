@@ -1,4 +1,5 @@
 import { logger } from "./logger.js";
+import { setPaused } from "./history.js";
 
 const EVOLUTION_URL  = process.env.EVOLUTION_API_URL;   // ex: https://minha-evolution.com
 const EVOLUTION_KEY  = process.env.EVOLUTION_API_KEY;   // sua API Key
@@ -47,31 +48,16 @@ export async function sendWhatsAppMessage({ phone, text, instance }) {
 }
 
 // ── Pausa o bot para um número (escalada para humano) ─────────────────────────
-export async function pauseBot({ phone, instance, minutes = 60 }) {
-  try {
-    // Evolution API v2: endpoint para ignorar contato por N minutos
-    await evolutionRequest(`/chatwoot/ignore/${instance}`, {
-      number: phone,
-      ignore: true,
-    });
-    logger.info({ phone, minutes }, "⏸️  Bot pausado");
-  } catch (err) {
-    // Se o endpoint não existir na sua versão, logue e continue
-    logger.warn({ err }, "Endpoint de pausa não disponível — implemente via flag no Redis");
-  }
+// Usa flag no Redis/memória como fonte de verdade. O time retoma via resumeBot.
+export async function pauseBot({ phone }) {
+  await setPaused(phone, true);
+  logger.info({ phone }, "⏸️  Bot pausado — atendimento humano ativo");
 }
 
 // ── Retoma o bot ──────────────────────────────────────────────────────────────
-export async function resumeBot({ phone, instance }) {
-  try {
-    await evolutionRequest(`/chatwoot/ignore/${instance}`, {
-      number: phone,
-      ignore: false,
-    });
-    logger.info({ phone }, "▶️  Bot retomado");
-  } catch (err) {
-    logger.warn({ err }, "Endpoint de retomada não disponível");
-  }
+export async function resumeBot({ phone }) {
+  await setPaused(phone, false);
+  logger.info({ phone }, "▶️  Bot retomado");
 }
 
 // ── Reação a mensagem (opcional — Evolution API v2+) ──────────────────────────
