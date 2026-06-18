@@ -2,9 +2,10 @@ import express from "express";
 import "dotenv/config";
 import { handleIncomingMessage } from "./antonela.js";
 import { isPaused } from "./history.js";
+import { resumeBot } from "./evolution.js";
 import { logger } from "./logger.js";
 
-// ── Validação de variáveis obrigatórias na inicialização ──────────────────────
+// ── Validação de variáveis obrigatórias ───────────────────────────────────────
 const REQUIRED_ENV = ["ANTHROPIC_API_KEY", "EVOLUTION_API_URL", "EVOLUTION_API_KEY", "EVOLUTION_INSTANCE"];
 const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
 if (missing.length) {
@@ -12,21 +13,83 @@ if (missing.length) {
   process.exit(1);
 }
 
+const ADMIN_KEY    = process.env.ADMIN_KEY;           // para /admin/*
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;   // opcional — configurar na Evolution API
+
 const app = express();
 app.use(express.json());
 
 // ── Deduplicação de mensagens ─────────────────────────────────────────────────
-// Evolution API pode reenviar o mesmo evento em caso de timeout. Guardamos os
-// IDs das últimas 500 mensagens processadas para descartar duplicatas.
 const processedIds = new Set();
 const MAX_DEDUP_SIZE = 500;
 
 function markProcessed(id) {
   processedIds.add(id);
   if (processedIds.size > MAX_DEDUP_SIZE) {
-    // Remove o mais antigo (primeiro inserido)
     processedIds.delete(processedIds.values().next().value);
   }
+}
+
+// ── Rate limiting por telefone ────────────────────────────────────────────────
+// Máximo de 10 mensagens por minuto por contato
+const rateCounts = new Map(); // phone → { count, resetAt }
+const RATE_LIMIT = 10;
+const RATE_WINDOW_MS = 60_000;
+
+function isRateLimited(phone) {
+  const now = Date.now();
+  const entry = rateCounts.get(phone);
+
+  if (!entry || now > entry.resetAt) {
+    rateCounts.set(phone, { count: 1, resetAt: now + RATE_WINDOW_MS });
+    return false;
+  }
+
+  entry.count += 1;
+  if (entry.count > RATE_LIMIT) return true;
+
+  return false;
+}
+
+// Limpa entradas expiradas a cada 5 minutos para não vazar memória
+setInterval(() => {
+  const now = Date.now();
+  for (const [phone, entry] of rateCounts) {
+    if (now > entry.resetAt) rateCounts.delete(phone);
+  }
+}, 5 * 60_000).unref();
+
+// ── Lock de concorrência por telefone ─────────────────────────────────────────
+// Garante que mensagens do mesmo contato sejam processadas em fila,
+// evitando race condition no histórico quando chegam rápido demais.
+const phoneLocks = new Map(); // phone → Promise
+
+async function withPhoneLock(phone, fn) {
+  const prev = phoneLocks.get(phone) ?? Promise.resolve();
+  let resolve;
+  const next = new Promise((r) => { resolve = r; });
+  phoneLocks.set(phone, next);
+
+  try {
+    await prev;
+    return await fn();
+  } finally {
+    resolve();
+    // Limpa entrada se ainda aponta para esta promise
+    if (phoneLocks.get(phone) === next) phoneLocks.delete(phone);
+  }
+}
+
+// ── Auth de admin ─────────────────────────────────────────────────────────────
+function requireAdminKey(req, res, next) {
+  if (!ADMIN_KEY) {
+    return res.status(503).json({ error: "ADMIN_KEY não configurada" });
+  }
+  const provided = req.headers["x-admin-key"] ?? req.query.key;
+  if (provided !== ADMIN_KEY) {
+    return res.status(401).json({ error: "Não autorizado" });
+  }
+  next();
 }
 
 // ── Health check ─────────────────────────────────────────────────────────────
@@ -34,24 +97,39 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", agent: "Antonela · Phosphorcode", ts: new Date().toISOString() });
 });
 
+// ── Retomar bot (time aciona após atendimento humano) ─────────────────────────
+app.post("/admin/resume", requireAdminKey, async (req, res) => {
+  const { phone } = req.body;
+  if (!phone) return res.status(400).json({ error: "phone obrigatório" });
+
+  await resumeBot({ phone });
+  logger.info({ phone }, "▶️  Bot retomado via admin");
+  res.json({ ok: true, phone });
+});
+
 // ── Webhook principal da Evolution API ───────────────────────────────────────
 app.post("/webhook/evolution", async (req, res) => {
+  // Valida assinatura se WEBHOOK_SECRET estiver configurado
+  if (WEBHOOK_SECRET) {
+    const provided = req.headers["x-webhook-secret"] ?? req.headers["authorization"];
+    if (provided !== WEBHOOK_SECRET) {
+      logger.warn({ ip: req.ip }, "Webhook com assinatura inválida rejeitado");
+      return res.sendStatus(401);
+    }
+  }
+
   // Responde 200 imediatamente para a Evolution API não reenviar
   res.sendStatus(200);
 
   try {
     const payload = req.body;
 
-    // Ignora eventos que não são mensagens de texto
     if (payload.event !== "messages.upsert") return;
 
     const msg = payload.data?.message;
     if (!msg) return;
 
-    // Ignora mensagens enviadas pelo próprio bot
     if (msg.key?.fromMe) return;
-
-    // Ignora mensagens de grupos (opcional — remova se quiser atender grupos)
     if (msg.key?.remoteJid?.includes("@g.us")) return;
 
     const msgId = msg.key?.id;
@@ -63,23 +141,29 @@ app.post("/webhook/evolution", async (req, res) => {
       markProcessed(msgId);
     }
 
-    const phone = msg.key.remoteJid; // ex: 5561999999999@s.whatsapp.net
+    const phone = msg.key.remoteJid;
     const name  = msg.pushName ?? "Lead";
     const text  = msg.message?.conversation
                ?? msg.message?.extendedTextMessage?.text
                ?? null;
 
-    if (!text) return; // Ignora áudio, imagem etc. (adicione handlers se precisar)
+    if (!text) return;
 
-    // Não processa se o atendimento humano estiver ativo para este contato
     if (await isPaused(phone)) {
       logger.debug({ phone }, "Bot pausado — mensagem ignorada (atendimento humano ativo)");
       return;
     }
 
+    if (isRateLimited(phone)) {
+      logger.warn({ phone }, "Rate limit atingido — mensagem ignorada");
+      return;
+    }
+
     logger.info({ phone, name, text }, "📩 Mensagem recebida");
 
-    await handleIncomingMessage({ phone, name, text, instance: payload.instance });
+    await withPhoneLock(phone, () =>
+      handleIncomingMessage({ phone, name, text, instance: payload.instance })
+    );
   } catch (err) {
     logger.error({ err }, "❌ Erro no webhook");
   }
@@ -95,7 +179,7 @@ const server = app.listen(PORT, () => {
 function shutdown(signal) {
   logger.info(`${signal} recebido — encerrando graciosamente`);
   server.close(() => process.exit(0));
-  setTimeout(() => process.exit(1), 5000).unref(); // força saída após 5s
+  setTimeout(() => process.exit(1), 5000).unref();
 }
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
