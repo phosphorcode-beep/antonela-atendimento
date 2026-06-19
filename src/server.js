@@ -6,10 +6,16 @@ import { resumeBot } from "./evolution.js";
 import { logger } from "./logger.js";
 
 // ── Validação de variáveis obrigatórias ───────────────────────────────────────
-const REQUIRED_ENV = ["ANTHROPIC_API_KEY", "EVOLUTION_API_URL", "EVOLUTION_API_KEY", "EVOLUTION_INSTANCE"];
+const REQUIRED_ENV = ["EVOLUTION_API_URL", "EVOLUTION_API_KEY", "EVOLUTION_INSTANCE"];
 const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
 if (missing.length) {
   logger.error({ missing }, "❌ Variáveis de ambiente obrigatórias não definidas. Configure o .env e reinicie.");
+  process.exit(1);
+}
+
+const LLM_KEYS = ["GROQ_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"];
+if (!LLM_KEYS.some((k) => process.env[k])) {
+  logger.error({ tried: LLM_KEYS }, "❌ Nenhuma chave de LLM definida. Defina GROQ_API_KEY, GEMINI_API_KEY ou ANTHROPIC_API_KEY.");
   process.exit(1);
 }
 

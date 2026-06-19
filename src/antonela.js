@@ -1,10 +1,8 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { chatCompletion } from "./llm.js";
 import { getHistory, saveHistory } from "./history.js";
 import { sendWhatsAppMessage } from "./evolution.js";
 import { detectIntent, handleIntent } from "./intent.js";
 import { logger } from "./logger.js";
-
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── System prompt da Antonela ─────────────────────────────────────────────────
 const SYSTEM_PROMPT = `Você é Antonela, assistente de atendimento da Phosphorcode.
@@ -54,39 +52,28 @@ Fora essas tags, responda normalmente.`;
 
 // ── Orquestra o atendimento ───────────────────────────────────────────────────
 export async function handleIncomingMessage({ phone, name, text, instance }) {
-  // 1. Busca histórico da conversa
   const history = await getHistory(phone);
-
-  // 2. Adiciona mensagem do usuário ao histórico
   history.push({ role: "user", content: text });
 
-  // 3. Chama a Antonela (Claude)
   let reply;
   try {
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1024,
+    reply = await chatCompletion({
       system: SYSTEM_PROMPT,
-      messages: history.slice(-20), // últimas 20 mensagens como contexto
+      messages: history.slice(-20),
     });
-
-    reply = response.content[0]?.text ?? "Desculpe, não consegui processar sua mensagem. Poderia repetir?";
+    reply ??= "Desculpe, não consegui processar sua mensagem. Poderia repetir?";
   } catch (err) {
-    logger.error({ err }, "❌ Erro na Claude API");
+    logger.error({ err }, "❌ Erro na LLM API");
     reply = "Estamos com uma instabilidade momentânea. Por favor, tente novamente em instantes.";
   }
 
-  // 4. Detecta intenção especial na resposta
   const { intent, cleanReply } = detectIntent(reply);
 
-  // 5. Salva resposta no histórico (sem a tag de intenção)
   history.push({ role: "assistant", content: cleanReply });
   await saveHistory(phone, history);
 
-  // 6. Envia resposta para o lead
   await sendWhatsAppMessage({ phone, text: cleanReply, instance });
 
-  // 7. Executa ação de intenção se houver
   if (intent) {
     await handleIntent({ intent, phone, name, history, instance });
   }
