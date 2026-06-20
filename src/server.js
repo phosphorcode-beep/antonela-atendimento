@@ -1,6 +1,6 @@
 import express from "express";
 import "dotenv/config";
-import { handleIncomingMessage } from "./antonela.js";
+import { handleIncomingMessage, handleSiteForm } from "./antonela.js";
 import { isPaused } from "./history.js";
 import { resumeBot } from "./evolution.js";
 import { resolveIncomingMedia } from "./media.js";
@@ -112,6 +112,26 @@ app.post("/admin/resume", requireAdminKey, async (req, res) => {
   await resumeBot({ phone });
   logger.info({ phone }, "▶️  Bot retomado via admin");
   res.json({ ok: true, phone });
+});
+
+// ── Formulário do site (envio automático) ────────────────────────────────────
+const FORM_SECRET = process.env.FORM_SECRET;
+
+app.post("/webhook/form", async (req, res) => {
+  if (FORM_SECRET) {
+    if (req.headers["x-form-secret"] !== FORM_SECRET) {
+      logger.warn({ ip: req.ip }, "Form com segredo inválido rejeitado");
+      return res.sendStatus(401);
+    }
+  }
+  res.json({ ok: true });
+
+  try {
+    const { nome, empresa, email, telefone, funcionarios, mensagem } = req.body ?? {};
+    await handleSiteForm({ nome, empresa, email, telefone, funcionarios, mensagem });
+  } catch (err) {
+    logger.error({ err }, "❌ Erro no webhook do formulário");
+  }
 });
 
 // ── Webhook principal da Evolution API ───────────────────────────────────────

@@ -114,3 +114,53 @@ export async function handleIncomingMessage({ phone, name, text, instance }) {
 
   logger.info({ phone, intent: intent ?? "none" }, "✅ Atendimento processado");
 }
+
+// ── Lead vindo do formulário do site (envio automático, sem wa.me) ────────────
+export async function handleSiteForm({ nome, empresa, email, telefone, funcionarios, mensagem }) {
+  const instance = process.env.EVOLUTION_INSTANCE;
+  const resumo = [
+    `Nome: ${nome || "-"}`,
+    `Empresa: ${empresa || "-"}`,
+    `E-mail: ${email || "-"}`,
+    `Telefone: ${telefone || "-"}`,
+    `Funcionários: ${funcionarios || "-"}`,
+    `Precisa resolver: ${mensagem || "-"}`,
+  ].join("\n");
+
+  // 1) Notifica o grupo COMERCIAL
+  await notifyGroup(`🟢 *LEAD DO SITE (formulário)*\n\n${resumo}`);
+  logger.info({ nome }, "🟢 Lead do formulário do site (automático)");
+
+  // 2) Manda a primeira mensagem para o cliente
+  const digits = (telefone || "").replace(/\D/g, "");
+  if (!digits) {
+    logger.warn("Formulário sem telefone válido, sem mensagem ao cliente");
+    return;
+  }
+  const numero = digits.startsWith("55") ? digits : `55${digits}`;
+  const jid = `${numero}@s.whatsapp.net`;
+  const firstName = (nome || "").trim().split(/\s+/)[0];
+
+  const userTurn = `(${firstName || "O lead"} preencheu o formulário do site)\n${resumo}`;
+  const history = await getHistory(jid);
+  history.push({ role: "user", content: userTurn });
+
+  const sys = firstName
+    ? `${SYSTEM_PROMPT}\n\n## Pessoa atual\nO primeiro nome de quem está falando com você é ${firstName}. Use esse nome com naturalidade. Esta é a PRIMEIRA mensagem do atendimento, iniciada porque a pessoa preencheu o formulário do site. Cumprimente, mostre que entendeu o que ela precisa e faça uma pergunta para avançar.`
+    : SYSTEM_PROMPT;
+
+  let reply;
+  try {
+    reply = await chatCompletion({ system: sys, messages: history.slice(-30) });
+  } catch (err) {
+    logger.error({ err }, "❌ Erro na LLM (form)");
+    reply = `Oi ${firstName || ""}, aqui é a Antonela, da Phosphorcode. Recebi seu contato pelo site e vou te ajudar pessoalmente. Pode me contar um pouco mais sobre o que está precisando resolver?`.replace("  ", " ");
+  }
+
+  const { cleanReply } = detectIntent(reply);
+  history.push({ role: "assistant", content: cleanReply });
+  await saveHistory(jid, history);
+
+  await sendWhatsAppMessage({ phone: numero, text: cleanReply, instance });
+  logger.info({ jid }, "📨 Mensagem inicial enviada ao lead do formulário");
+}

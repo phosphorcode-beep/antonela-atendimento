@@ -80,7 +80,22 @@ services:
     volumes:
       - ./google-credentials.json:/app/google-credentials.json:ro
 
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - antonela
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   pg_data:
   redis_data:
   evolution_instances:
+  caddy_data:
+  caddy_config:
