@@ -3,6 +3,7 @@ import "dotenv/config";
 import { handleIncomingMessage } from "./antonela.js";
 import { isPaused } from "./history.js";
 import { resumeBot } from "./evolution.js";
+import { resolveIncomingMedia } from "./media.js";
 import { logger } from "./logger.js";
 
 // ── Validação de variáveis obrigatórias ───────────────────────────────────────
@@ -132,7 +133,7 @@ app.post("/webhook/evolution", async (req, res) => {
 
     if (payload.event !== "messages.upsert") return;
 
-    const msg = payload.data?.message;
+    const msg = payload.data;
     if (!msg) return;
 
     if (msg.key?.fromMe) return;
@@ -149,21 +150,27 @@ app.post("/webhook/evolution", async (req, res) => {
 
     const phone = msg.key.remoteJid;
     const name  = msg.pushName ?? "Lead";
-    const text  = msg.message?.conversation
-               ?? msg.message?.extendedTextMessage?.text
-               ?? null;
-
-    if (!text) return;
 
     if (await isPaused(phone)) {
-      logger.debug({ phone }, "Bot pausado — mensagem ignorada (atendimento humano ativo)");
+      logger.debug({ phone }, "Bot pausado, mensagem ignorada (atendimento humano ativo)");
       return;
     }
 
     if (isRateLimited(phone)) {
-      logger.warn({ phone }, "Rate limit atingido — mensagem ignorada");
+      logger.warn({ phone }, "Rate limit atingido, mensagem ignorada");
       return;
     }
+
+    // Texto direto ou conteúdo de mídia (áudio, imagem, figurinha, vídeo)
+    let text = msg.message?.conversation
+            ?? msg.message?.extendedTextMessage?.text
+            ?? null;
+
+    if (!text) {
+      text = await resolveIncomingMedia({ data: msg, instance: payload.instance });
+    }
+
+    if (!text) return;
 
     logger.info({ phone, name, text }, "📩 Mensagem recebida");
 

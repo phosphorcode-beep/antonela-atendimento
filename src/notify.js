@@ -78,6 +78,29 @@ async function sendSlack({ type, phone, name, message }) {
   }
 }
 
+// ── Envia uma mensagem para o grupo do time (PHOSPHOR COMERCIAL) ──────────────
+export async function notifyGroup(text) {
+  const groupJid = process.env.TEAM_GROUP_JID;
+  if (!groupJid || !process.env.EVOLUTION_API_URL) {
+    logger.warn("TEAM_GROUP_JID não configurado — notificação de grupo ignorada");
+    return;
+  }
+  try {
+    const res = await fetch(
+      `${process.env.EVOLUTION_API_URL}/message/sendText/${process.env.EVOLUTION_INSTANCE}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: process.env.EVOLUTION_API_KEY },
+        body: JSON.stringify({ number: groupJid, text }),
+      },
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    logger.info({ groupJid }, "📣 Grupo notificado");
+  } catch (err) {
+    logger.error({ err }, "Falha ao notificar grupo");
+  }
+}
+
 // ── Notifica via WhatsApp do próprio time ─────────────────────────────────────
 async function notifyViaWhatsApp({ type, phone, name, message }) {
   const text = `🤖 *Antonela · ${type}*\n\n👤 ${name}\n📱 ${phone}\n\n${message}`;
