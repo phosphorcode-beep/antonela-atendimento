@@ -1,7 +1,7 @@
 import { createClient } from "redis";
 import { logger } from "./logger.js";
 
-const HISTORY_TTL = 60 * 60 * 24 * 3; // 3 dias em segundos
+const HISTORY_TTL = 60 * 60 * 24 * 30; // 30 dias em segundos
 const KEY_PREFIX  = "antonela:history:";
 const PAUSED_PREFIX = "antonela:paused:";
 const PAUSED_TTL = 60 * 60 * 24; // 24h — time tem 1 dia para retomar manualmente
@@ -53,8 +53,8 @@ export async function saveHistory(phone, messages) {
   const client = await getRedis();
   const key    = KEY_PREFIX + phone;
 
-  // Mantém no máximo 40 mensagens para economizar memória
-  const trimmed = messages.slice(-40);
+  // Mantém no máximo 80 mensagens para economizar memória
+  const trimmed = messages.slice(-80);
 
   try {
     if (client) {
