@@ -35,7 +35,13 @@ async function evolutionRequest(path, body, retries = 3) {
 }
 
 // ── Envia mensagem de texto ───────────────────────────────────────────────────
+// Espera (sem mostrar nada) antes de começar a "digitar" — simula a pessoa
+// vendo a mensagem e só depois respondendo. Configurável via PRE_TYPING_MS.
+const PRE_TYPING_MS = Number(process.env.PRE_TYPING_MS ?? 10000);
+
 export async function sendWhatsAppMessage({ phone, text, instance }) {
+  if (PRE_TYPING_MS > 0) await sleep(PRE_TYPING_MS);
+
   // Mostra "digitando..." por um tempo proporcional ao tamanho do texto,
   // para parecer uma resposta humana (formato v2: campo delay no topo).
   const typingMs = Math.min(2500 + text.length * 45, 9000);
