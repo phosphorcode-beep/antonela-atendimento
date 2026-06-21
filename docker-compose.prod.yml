@@ -79,23 +79,15 @@ services:
       - GOOGLE_CREDENTIALS_PATH=/app/google-credentials.json
     volumes:
       - ./google-credentials.json:/app/google-credentials.json:ro
-
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    depends_on:
-      - antonela
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=antonela_default"
+      - "traefik.http.routers.antonela.rule=Host(`bot.phosphorcode.com.br`) && (PathPrefix(`/webhook/form`) || PathPrefix(`/health`))"
+      - "traefik.http.routers.antonela.entrypoints=websecure"
+      - "traefik.http.routers.antonela.tls.certresolver=letsencrypt"
+      - "traefik.http.services.antonela.loadbalancer.server.port=3000"
 
 volumes:
   pg_data:
   redis_data:
   evolution_instances:
-  caddy_data:
-  caddy_config:
