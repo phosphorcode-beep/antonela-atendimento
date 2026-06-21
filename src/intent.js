@@ -173,30 +173,22 @@ async function handleEscalar({ phone, name, history, instance }) {
     .map((m) => `[${m.role === "user" ? name : "Antonela"}] ${m.content}`)
     .join("\n");
 
-  await pauseBot({ phone });
-
   const groupMsg = [
     `🆘 *ATENDIMENTO HUMANO SOLICITADO*`,
     ``,
     `👤 ${name}`,
     `📱 ${phone.split("@")[0]}`,
     ``,
-    `O bot foi pausado. Alguém do time precisa assumir a conversa.`,
+    `O lead pediu para falar com uma pessoa. A Antonela segue na conversa, mas alguém do time pode assumir quando puder.`,
     ``,
     `Contexto:`,
     lastMsgs,
   ].join("\n");
   await notifyGroup(groupMsg);
 
-  await notifyTeam({
-    type: "ESCALADA",
-    phone,
-    name,
-    message: groupMsg,
-  });
+  await notifyTeam({ type: "ESCALADA", phone, name, message: groupMsg });
 
-  await clearHistory(phone);
-  logger.info({ phone }, "🧑 Bot pausado, atendimento humano acionado");
+  logger.info({ phone }, "🧑 Atendimento humano solicitado (bot continua ativo)");
 }
 
 // ── LEAD_QUALIFICADO: salva lead no CRM/planilha ─────────────────────────────
