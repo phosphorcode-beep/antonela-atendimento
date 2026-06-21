@@ -36,16 +36,19 @@ async function evolutionRequest(path, body, retries = 3) {
 
 // ── Envia mensagem de texto ───────────────────────────────────────────────────
 export async function sendWhatsAppMessage({ phone, text, instance }) {
-  const delay = Math.min(1000 + text.length * 18, 4000);
-  await sleep(delay);
+  // Mostra "digitando..." por um tempo proporcional ao tamanho do texto,
+  // para parecer uma resposta humana (formato v2: campo delay no topo).
+  const typingMs = Math.min(2500 + text.length * 45, 9000);
 
   try {
     await evolutionRequest(`/message/sendText/${instance}`, {
       number: phone,
       text,
-      options: { delay: 0, presence: "composing" },
+      delay: typingMs,
+      presence: "composing",
+      linkPreview: true,
     });
-    logger.info({ phone, chars: text.length }, "📤 Mensagem enviada");
+    logger.info({ phone, chars: text.length, typingMs }, "📤 Mensagem enviada");
   } catch (err) {
     logger.error({ err, phone }, "❌ Falha ao enviar mensagem");
     throw err;
