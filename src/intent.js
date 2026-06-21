@@ -11,10 +11,21 @@ const INTENTS = ["[AGENDAR]", "[SUPORTE]", "[ESCALAR]", "[LEAD_QUALIFICADO]"];
 // ── Detecta intenção na resposta da Antonela ──────────────────────────────────
 export function detectIntent(reply) {
   for (const tag of INTENTS) {
-    if (reply.startsWith(tag)) {
+    if (reply.includes(tag)) {
+      // Remove a tag de qualquer posição (início, meio ou fim) e limpa espaços
+      let cleanReply = reply
+        .split(tag).join(" ")
+        .replace(/[ \t]{2,}/g, " ")
+        .replace(/ *\n/g, "\n")
+        .trim();
+
+      if (!cleanReply) {
+        cleanReply = "Perfeito, já estou cuidando disso para você.";
+      }
+
       return {
         intent: tag.replace(/\[|\]/g, ""), // "AGENDAR", "SUPORTE" etc.
-        cleanReply: reply.slice(tag.length).trim(),
+        cleanReply,
       };
     }
   }
