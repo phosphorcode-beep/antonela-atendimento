@@ -144,6 +144,7 @@ export async function upsertCompanyLead(lead) {
     fit_score: lead.fitScore,
     suggested_message: lead.suggestedMessage,
     source: lead.source,
+    segment: lead.segment ?? null,
     fontes: lead.fontes ?? null,
     lacunas: lead.lacunas ?? null,
     confianca: lead.confianca ?? null,

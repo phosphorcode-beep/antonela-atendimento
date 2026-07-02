@@ -278,6 +278,7 @@ create table company_leads (
   fit_score int,
   suggested_message text,
   source text,                               -- overpass | brasilio | cnpja | cnpjws | minhareceita | opencnpj | manual-site | manual-cnpj
+  segment text,                              -- industria | distribuidora | servicos_campo | clinicas | franquias | agro (null em /empresa manual)
   fontes jsonb,                              -- ex: ["overpass","cnpja","qsa","brave-linkedin"]
   lacunas jsonb,                             -- ex: ["telefone não encontrado"]
   confianca text,                            -- alta | media | baixa
@@ -290,6 +291,7 @@ create table company_leads (
 
 -- Se a tabela já existir de antes:
 alter table company_leads
+  add column if not exists segment text,
   add column if not exists whatsapp text,
   add column if not exists linkedin text,
   add column if not exists confianca text,
@@ -413,4 +415,4 @@ No `src/server.js`, a mensagem de áudio chega como `audioMessage` e imagem como
 ## Suporte
 
 **Phosphorcode** · phosphorcode.com.br  
-Engenharia de software para varejo e saúde.
+Sistemas sob medida para empresas que cresceram mais rápido que seus processos.
