@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import WebSocket from "ws";
 import { logger } from "./logger.js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -13,9 +14,14 @@ export function prospectingEnabled() {
   return Boolean(SUPABASE_URL) && Boolean(SUPABASE_SERVICE_KEY);
 }
 
+// ── Node 20 (usado no container de produção) não tem WebSocket nativo, e o
+// cliente realtime do supabase-js exige um mesmo sem usarmos realtime.
+// Passar o "ws" como transport evita o crash na construção do client. ────────
 function getClient() {
   if (client) return client;
-  client = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  client = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+    realtime: { transport: WebSocket },
+  });
   return client;
 }
 
