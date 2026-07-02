@@ -6,7 +6,9 @@ import { prospectingEnabled, upsertCompanyLead } from "./supabase.js";
 import { notifyLeadsGroup } from "./notify.js";
 
 const EMPRESA_COMMAND_RE = /^\/empresa\s+(.+)$/i;
-const PROSPECT_COMMAND_RE = /^\/?prospect(?:e|ar)?\s+(\d{1,3})\s+(?:empresas?|leads?)(?:\s+(?:(?:de|do|da|dos|das|em|no|na|nos|nas)\s+)?(.+))?$/i;
+// Aceita tanto "prospecte 5 empresas de clinicas" quanto a forma natural
+// "prospecte 5 clinicas" — "empresas/leads" e a preposição são opcionais.
+const PROSPECT_COMMAND_RE = /^\/?prospect(?:e|ar)?\s+(\d{1,3})(?:\s+(?:empresas?|leads?))?(?:\s+(?:de|do|da|dos|das|em|no|na|nos|nas)\b)?(?:\s+(.+))?$/i;
 const WEBSITE_RE = /^(https?:\/\/)?[a-z0-9-]+(\.[a-z0-9-]+)+(\/\S*)?$/i;
 const MAX_PROSPECT_RESULTS = 50;
 
