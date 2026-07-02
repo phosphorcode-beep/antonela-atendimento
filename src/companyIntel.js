@@ -2,7 +2,7 @@ import { logger } from "./logger.js";
 import { enrichByCnpj } from "./cnpjProviders.js";
 import { geocodeCity, searchBusinesses } from "./discovery.js";
 import { brasilioEnabled, searchByCnae } from "./brasilioProvider.js";
-import { braveSearchEnabled, findSocialLinks, findDecisionMakerMention } from "./braveSearch.js";
+import { braveSearchEnabled, findOfficialWebsite, findSocialLinks, findDecisionMakerMention } from "./braveSearch.js";
 import { computeConfidence, computeTier } from "./confidence.js";
 import { getNicheProfile } from "./niches.js";
 import { classifyPorte, evaluateSize } from "./sizing.js";
@@ -222,13 +222,21 @@ export async function buildLead(business, segment) {
   const lacunas = [];
 
   let cnpj = business.cnpj || null;
+  let website = business.website || null;
   let instagram = null;
   let siteEmail = null;
   let siteTelefone = null;
   let siteWhatsapp = null;
 
-  if (business.website) {
-    const signals = await extractSiteSignals(business.website);
+  // Sem site nem CNPJ: tenta descobrir o site oficial via Brave. É o que
+  // destrava o CNPJ (e daí porte/decisor) pra leads que só vieram do Overpass.
+  if (!website && !cnpj && braveSearchEnabled() && business.nome) {
+    website = await findOfficialWebsite({ nome: business.nome, cidade: business.cidade });
+    if (website) fontes.push("brave-site");
+  }
+
+  if (website) {
+    const signals = await extractSiteSignals(website);
     cnpj = cnpj || signals.cnpj;
     instagram = signals.instagram;
     siteEmail = signals.email;
@@ -301,7 +309,7 @@ export async function buildLead(business, segment) {
     telefone: enriched?.telefone || business.telefone || siteTelefone || null,
     whatsapp: enriched?.telefone || business.telefone || siteWhatsapp || siteTelefone || null,
     email: enriched?.email || siteEmail || null,
-    website: business.website || null,
+    website: website || null,
     instagram: instagram || null,
     linkedin: linkedin || null,
     cnaePrincipal: enriched?.cnaePrincipal || business.cnaePrincipal || null,

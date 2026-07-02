@@ -38,6 +38,31 @@ async function searchWeb(query, count = 5) {
   }
 }
 
+// ── Hosts que não são o site oficial da empresa (redes, diretórios, listas) ──
+const NON_OFFICIAL_HOST = /(instagram|facebook|fb\.com|linkedin|twitter|x\.com|youtube|tiktok|wa\.me|whatsapp|google\.|maps\.|goo\.gl|waze|ifood|olx|mercadolivre|mercadolibre|amazon|reclameaqui|guiamais|apontador|telelistas|econodata|cnpj|jusbrasil|wikipedia|glassdoor|indeed|catho|vagas|booking|tripadvisor|yelp)\./i;
+
+// ── Acha o provável site oficial da empresa (pra depois raspar CNPJ/contatos).
+// Filtra redes sociais, diretórios e listas — devolve a raiz do primeiro
+// domínio "próprio" que aparecer, ou null. Usa 1 chamada Brave ─────────────
+export async function findOfficialWebsite({ nome, cidade }) {
+  if (!nome || !braveSearchEnabled()) return null;
+
+  const local = cidade ? ` ${cidade}` : "";
+  const results = await searchWeb(`${nome}${local} site oficial`, 5);
+
+  for (const r of results) {
+    try {
+      const host = new URL(r.url).hostname.replace(/^www\./, "");
+      if (NON_OFFICIAL_HOST.test(host)) continue;
+      if (/\.gov\.br$/i.test(host)) continue;
+      return `https://${host}`;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 // ── Acha o Instagram/LinkedIn públicos da empresa via dorks ─────────────────
 export async function findSocialLinks({ nome, cidade }) {
   if (!nome) return { instagram: null, linkedin: null };
