@@ -5,6 +5,7 @@ import { brasilioEnabled, searchByCnae } from "./brasilioProvider.js";
 import { braveSearchEnabled, findSocialLinks, findDecisionMakerMention } from "./braveSearch.js";
 import { computeConfidence, computeTier } from "./confidence.js";
 import { getNicheProfile } from "./niches.js";
+import { classifyPorte, evaluateSize } from "./sizing.js";
 import { upsertCompanyLead } from "./supabase.js";
 import { notifyLeadsGroup } from "./notify.js";
 
@@ -49,6 +50,36 @@ function extractInstagramFromHtml(html) {
   return null;
 }
 
+// ── E-mail: prioriza mailto:, cai pra regex no corpo. Descarta lixo comum de
+// front-end (imagens @2x, sentry, wixpress, exemplos) que casa com o padrão ──
+const EMAIL_JUNK_RE = /(sentry|wixpress|example|@2x|\.png|\.jpg|\.svg|\.gif|\.webp|domain\.com|email\.com|seuemail|your-?email)/i;
+function extractEmailFromHtml(html) {
+  const mailto = html.match(/mailto:([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})/i);
+  if (mailto && !EMAIL_JUNK_RE.test(mailto[1])) return mailto[1].toLowerCase();
+
+  for (const m of html.matchAll(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi)) {
+    if (!EMAIL_JUNK_RE.test(m[0])) return m[0].toLowerCase();
+  }
+  return null;
+}
+
+// ── WhatsApp: links wa.me / api.whatsapp.com. Valida DDD+número BR (10-13 díg). ─
+function extractWhatsappFromHtml(html) {
+  const m = html.match(/(?:wa\.me\/|api\.whatsapp\.com\/send\?phone=)(\+?\d{10,13})/i);
+  if (!m) return null;
+  const digits = m[1].replace(/\D/g, "");
+  return digits.length >= 10 ? digits : null;
+}
+
+// ── Telefone: link tel:. Só dígitos, exige tamanho plausível de fixo/celular BR ─
+function extractPhoneFromHtml(html) {
+  for (const m of html.matchAll(/tel:(\+?[\d\s().-]{8,20})/gi)) {
+    const digits = m[1].replace(/\D/g, "");
+    if (digits.length >= 10 && digits.length <= 13) return digits;
+  }
+  return null;
+}
+
 // ── Busca o HTML do site (usado tanto pro CNPJ quanto pro Instagram) ─────────
 export async function fetchSiteHtml(website) {
   if (!website) return null;
@@ -67,12 +98,17 @@ export async function fetchSiteHtml(website) {
 // política de privacidade, e ela quase sempre lista a razão social/CNPJ) ─────
 const CNPJ_FALLBACK_PATHS = ["/politica-de-privacidade", "/termos-de-uso"];
 
-// ── Extrai os sinais disponíveis no site: CNPJ (validado) e Instagram ───────
+// ── Extrai os sinais disponíveis no site: CNPJ (validado), Instagram e contatos
+// (e-mail, telefone, WhatsApp). Os contatos ajudam a acionar leads que só têm
+// site, sem depender de enriquecimento por CNPJ ────────────────────────────
 export async function extractSiteSignals(website) {
   const homeHtml = await fetchSiteHtml(website);
-  if (!homeHtml) return { cnpj: null, instagram: null };
+  if (!homeHtml) return { cnpj: null, instagram: null, email: null, telefone: null, whatsapp: null };
 
   const instagram = extractInstagramFromHtml(homeHtml);
+  const email = extractEmailFromHtml(homeHtml);
+  const whatsapp = extractWhatsappFromHtml(homeHtml);
+  const telefone = extractPhoneFromHtml(homeHtml) || whatsapp;
   let cnpj = extractCnpjFromHtml(homeHtml);
 
   if (!cnpj) {
@@ -85,7 +121,7 @@ export async function extractSiteSignals(website) {
     }
   }
 
-  return { cnpj, instagram };
+  return { cnpj, instagram, email, telefone, whatsapp };
 }
 
 // ── Prioridade de qualificação pra inferir o decisor provável ─────────────────
@@ -128,6 +164,8 @@ export function calculateFitScore(lead, segment) {
   if (lead.decisionMakerConfidence >= 0.7) score += 15;
   if (lead.matriz) score += 10;
   if (lead.website) score += 10;
+  // Porte confirmado dentro do alvo (PME/MEI) é sinal forte de fit comercial.
+  if (lead.sizeKnown && lead.sizeIsTarget) score += 15;
 
   return Math.min(score, 100);
 }
@@ -185,11 +223,18 @@ export async function buildLead(business, segment) {
 
   let cnpj = business.cnpj || null;
   let instagram = null;
+  let siteEmail = null;
+  let siteTelefone = null;
+  let siteWhatsapp = null;
 
   if (business.website) {
     const signals = await extractSiteSignals(business.website);
     cnpj = cnpj || signals.cnpj;
     instagram = signals.instagram;
+    siteEmail = signals.email;
+    siteTelefone = signals.telefone;
+    siteWhatsapp = signals.whatsapp;
+    if (siteEmail || siteTelefone || siteWhatsapp) fontes.push("site");
   }
 
   let enriched = null;
@@ -238,14 +283,24 @@ export async function buildLead(business, segment) {
 
   if (!decisionMaker.nome) lacunas.push("decisor não confirmado");
 
+  // ── Porte/tamanho: só é conhecido quando há dado de CNPJ (enriquecimento ou
+  // brasil.io). Usado pra filtrar empresas grandes (foco em PME/MEI) ─────────
+  const porte = classifyPorte({
+    code: enriched?.porteCode ?? business.porteCode,
+    text: enriched?.porteText,
+    mei: enriched?.mei,
+  });
+  const capitalSocial = enriched?.capitalSocial ?? business.capitalSocial ?? null;
+  const size = evaluateSize({ porte, capitalSocial });
+
   const lead = {
     segment,
     cnpj: cnpj || null,
     razaoSocial: enriched?.razaoSocial || business.razaoSocial || null,
     nomeFantasia: enriched?.nomeFantasia || business.nome || null,
-    telefone: enriched?.telefone || business.telefone || null,
-    whatsapp: enriched?.telefone || business.telefone || null,
-    email: enriched?.email || null,
+    telefone: enriched?.telefone || business.telefone || siteTelefone || null,
+    whatsapp: enriched?.telefone || business.telefone || siteWhatsapp || siteTelefone || null,
+    email: enriched?.email || siteEmail || null,
     website: business.website || null,
     instagram: instagram || null,
     linkedin: linkedin || null,
@@ -255,6 +310,11 @@ export async function buildLead(business, segment) {
     uf: enriched?.uf || business.uf || null,
     endereco: enriched?.endereco || business.endereco || null,
     matriz: enriched?.matriz ?? null,
+    porte: porte || null,
+    capitalSocial: capitalSocial ?? null,
+    sizeKnown: size.known,
+    sizeIsTarget: size.isTarget,
+    sizeReason: size.reason,
     situacaoAtiva: enriched?.situacaoAtiva ?? business.situacaoAtiva ?? null,
     decisionMakerName: decisionMaker.nome,
     decisionMakerRole: decisionMaker.qualificacao,
@@ -266,6 +326,7 @@ export async function buildLead(business, segment) {
 
   if (!lead.telefone) lacunas.push("telefone não encontrado");
   if (!lead.email) lacunas.push("email não encontrado");
+  if (!size.known) lacunas.push("porte não confirmado");
   lead.lacunas = lacunas;
 
   lead.fitScore = calculateFitScore(lead, segment);
@@ -292,6 +353,8 @@ export function toStructuredOutput(lead) {
     linkedin: lead.linkedin,
     decisor_nome: lead.decisionMakerName,
     decisor_cargo: lead.decisionMakerRole,
+    porte: lead.porte,
+    capital_social: lead.capitalSocial,
     fontes: lead.fontes,
     confianca: lead.confianca,
     tier: lead.tier,
@@ -306,10 +369,20 @@ export async function processCompany(business, segment) {
   const lead = await buildLead(business, segment);
   logger.info(toStructuredOutput(lead), "📊 Lead processado");
 
+  // Filtro de tamanho: descarta empresa grande (foco em PME/MEI). Só filtra
+  // quando o porte é conhecido — sem dado, o lead segue e fica sinalizado.
+  if (lead.sizeKnown && !lead.sizeIsTarget) {
+    logger.info(
+      { empresa: lead.nomeFantasia || lead.razaoSocial, porte: lead.porte, capital: lead.capitalSocial },
+      "⏭️  Lead descartado (empresa grande, fora do alvo PME/MEI)",
+    );
+    return { lead, saved: null, filtered: true };
+  }
+
   const saved = await upsertCompanyLead(lead);
   if (saved) await notifyLeadsGroup(formatLeadCard(lead));
 
-  return { lead, saved };
+  return { lead, saved, filtered: false };
 }
 
 // ── Dedup entre fontes de descoberta (Overpass + brasil.io): por CNPJ quando
@@ -328,7 +401,7 @@ function dedupCandidates(businesses) {
   return result;
 }
 
-function buildRoundSummary(leads) {
+function buildRoundSummary(leads, filtered = 0) {
   const byTier = { A: 0, B: 0, C: 0 };
   const lacunaCounts = new Map();
   let comDecisor = 0;
@@ -350,6 +423,7 @@ function buildRoundSummary(leads) {
     `📊 *Resumo da rodada*`,
     `Tier A: ${byTier.A} · Tier B: ${byTier.B} · Tier C: ${byTier.C}`,
     `Decisor confirmado: ${comDecisor}/${leads.length}`,
+    filtered ? `Descartadas por porte (grandes): ${filtered}` : null,
     topLacunas.length ? `Maiores lacunas: ${topLacunas.join(", ")}` : null,
   ].filter(Boolean);
 
@@ -386,6 +460,8 @@ export function buildCompanySummary(lead, segment) {
 // ── Card visual pro grupo (usado tanto na descoberta automática quanto no /empresa).
 // Cada seção só aparece se tiver pelo menos um dado real — nada de "não identificado"
 // poluindo o card quando a informação simplesmente não existe ──────────────────
+const PORTE_LABEL = { MEI: "MEI", ME: "Microempresa", EPP: "Pequeno porte", DEMAIS: "Médio/grande" };
+
 export function formatLeadCard(lead) {
   const divider = "───────────────────";
   const titulo = lead.nomeFantasia || lead.razaoSocial || domainFallback(lead.website) || "Empresa não identificada";
@@ -407,6 +483,7 @@ export function formatLeadCard(lead) {
     [
       lead.cnpj ? `📋 *CNPJ:* ${lead.cnpj}` : null,
       lead.razaoSocial && lead.razaoSocial !== titulo ? `🏛️ *Razão social:* ${lead.razaoSocial}` : null,
+      lead.porte ? `🏷️ *Porte:* ${PORTE_LABEL[lead.porte] || lead.porte}` : null,
       local ? `📍 *Local:* ${local}` : null,
       lead.endereco ? `🗺️ *Endereço:* ${lead.endereco}` : null,
     ].filter(Boolean),
@@ -469,10 +546,15 @@ export async function runDiscovery({ city, uf, segment, cnae, maxResults = 20 })
   const businesses = dedupCandidates([...overpassResults, ...brasilioResults]).slice(0, maxResults);
 
   let processed = 0;
+  let filtered = 0;
   const leads = [];
   for (const business of businesses) {
     try {
-      const { lead, saved } = await processCompany(business, segment);
+      const { lead, saved, filtered: wasFiltered } = await processCompany(business, segment);
+      if (wasFiltered) {
+        filtered += 1;
+        continue; // empresa grande: fora do alvo, não entra no resumo
+      }
       leads.push(lead);
       if (saved) processed += 1;
     } catch (err) {
@@ -480,8 +562,8 @@ export async function runDiscovery({ city, uf, segment, cnae, maxResults = 20 })
     }
   }
 
-  if (leads.length) await notifyLeadsGroup(buildRoundSummary(leads));
+  if (leads.length || filtered) await notifyLeadsGroup(buildRoundSummary(leads, filtered));
 
-  logger.info({ found: businesses.length, processed }, "✅ Descoberta de leads concluída");
-  return { found: businesses.length, processed };
+  logger.info({ found: businesses.length, processed, filtered }, "✅ Descoberta de leads concluída");
+  return { found: businesses.length, processed, filtered };
 }

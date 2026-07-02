@@ -71,6 +71,8 @@ export async function searchByCnae({ cnae, municipio, uf, maxResults = 20 }) {
           cnaePrincipal: firstOf(r, ["cnae_fiscal"]),
           cnaeDescricao: firstOf(r, ["cnae_fiscal_descricao"]),
           situacaoAtiva: isAtiva(firstOf(r, ["descricao_situacao_cadastral", "situacao_cadastral"])),
+          porteCode: firstOf(r, ["codigo_porte", "porte_empresa", "porte"]),
+          capitalSocial: firstOf(r, ["capital_social"]),
           website: null,
           source: "brasilio",
         };
