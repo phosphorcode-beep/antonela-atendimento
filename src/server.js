@@ -5,6 +5,11 @@ import { isPaused } from "./history.js";
 import { resumeBot } from "./evolution.js";
 import { resolveIncomingMedia } from "./media.js";
 import { logger } from "./logger.js";
+import { runCadenceTick, checkProspectReply } from "./prospecting.js";
+import { prospectingEnabled, upsertLeads } from "./supabase.js";
+import { sheetsEnabled, readLeadsFromSheet } from "./sheets.js";
+import { runDiscovery } from "./companyIntel.js";
+import { isEmpresaCommand, handleEmpresaCommand } from "./companyCommand.js";
 
 // ── Validação de variáveis obrigatórias ───────────────────────────────────────
 const REQUIRED_ENV = ["EVOLUTION_API_URL", "EVOLUTION_API_KEY", "EVOLUTION_INSTANCE"];
@@ -114,6 +119,41 @@ app.post("/admin/resume", requireAdminKey, async (req, res) => {
   res.json({ ok: true, phone });
 });
 
+// ── Prospecção: importa leads da planilha para o Supabase ───────────────────
+app.post("/admin/prospect/import", requireAdminKey, async (_req, res) => {
+  if (!prospectingEnabled() || !sheetsEnabled()) {
+    return res.status(503).json({ error: "Supabase e/ou Google Sheets não configurados" });
+  }
+
+  try {
+    const leads = await readLeadsFromSheet();
+    const inserted = await upsertLeads(leads);
+    logger.info({ read: leads.length, inserted: inserted.length }, "📄 Import de prospecção concluído");
+    res.json({ ok: true, read: leads.length, inserted: inserted.length });
+  } catch (err) {
+    logger.error({ err }, "❌ Erro no import de prospecção");
+    res.status(500).json({ error: "Falha ao importar leads" });
+  }
+});
+
+// ── Prospecção: descobre empresas novas por cidade/segmento (grátis) ────────
+app.post("/admin/prospect/discover", requireAdminKey, async (req, res) => {
+  if (!prospectingEnabled()) {
+    return res.status(503).json({ error: "Supabase não configurado" });
+  }
+
+  const { city, uf, segment, maxResults } = req.body ?? {};
+  if (!city || !uf || !segment) {
+    return res.status(400).json({ error: "city, uf e segment são obrigatórios" });
+  }
+
+  res.status(202).json({ ok: true, started: true });
+
+  runDiscovery({ city, uf, segment, maxResults }).catch((err) => {
+    logger.error({ err }, "❌ Erro na descoberta de leads");
+  });
+});
+
 // ── Formulário do site (envio automático) ────────────────────────────────────
 const FORM_SECRET = process.env.FORM_SECRET;
 
@@ -157,7 +197,6 @@ app.post("/webhook/evolution", async (req, res) => {
     if (!msg) return;
 
     if (msg.key?.fromMe) return;
-    if (msg.key?.remoteJid?.includes("@g.us")) return;
 
     const msgId = msg.key?.id;
     if (msgId) {
@@ -168,16 +207,24 @@ app.post("/webhook/evolution", async (req, res) => {
       markProcessed(msgId);
     }
 
-    const phone = msg.key.remoteJid;
+    const remoteJid = msg.key.remoteJid;
+
+    if (remoteJid?.includes("@g.us")) {
+      // Único comando aceito em grupo: /empresa <nome|site|cnpj>, só no grupo Phosphor Leads
+      if (remoteJid === process.env.LEADS_GROUP_JID) {
+        const groupText = msg.message?.conversation ?? msg.message?.extendedTextMessage?.text ?? null;
+        if (groupText && isEmpresaCommand(groupText)) {
+          await handleEmpresaCommand(groupText);
+        }
+      }
+      return;
+    }
+
+    const phone = remoteJid;
     const name  = msg.pushName ?? "Lead";
 
     if (await isPaused(phone)) {
       logger.debug({ phone }, "Bot pausado, mensagem ignorada (atendimento humano ativo)");
-      return;
-    }
-
-    if (isRateLimited(phone)) {
-      logger.warn({ phone }, "Rate limit atingido, mensagem ignorada");
       return;
     }
 
@@ -192,6 +239,14 @@ app.post("/webhook/evolution", async (req, res) => {
 
     if (!text) return;
 
+    const { handled } = await checkProspectReply({ phone, text, instance: payload.instance });
+    if (handled) return;
+
+    if (isRateLimited(phone)) {
+      logger.warn({ phone }, "Rate limit atingido, mensagem ignorada");
+      return;
+    }
+
     logger.info({ phone, name, text }, "📩 Mensagem recebida");
 
     await withPhoneLock(phone, () =>
@@ -201,6 +256,17 @@ app.post("/webhook/evolution", async (req, res) => {
     logger.error({ err }, "❌ Erro no webhook");
   }
 });
+
+// ── Prospecção: tick periódico de cadência (D0/D+3/D+7) ──────────────────────
+if (prospectingEnabled()) {
+  const PROSPECT_TICK_MS = Number(process.env.PROSPECT_TICK_MS ?? 900_000);
+  setInterval(() => {
+    runCadenceTick().catch((err) => logger.error({ err }, "❌ Erro no tick de prospecção"));
+  }, PROSPECT_TICK_MS).unref();
+  logger.info({ PROSPECT_TICK_MS }, "🎯 Cadência de prospecção ativa");
+} else {
+  logger.info("Prospecção desativada (SUPABASE_URL/SUPABASE_SERVICE_KEY não configurados)");
+}
 
 // ── Inicia servidor ───────────────────────────────────────────────────────────
 const PORT = process.env.PORT ?? 3000;

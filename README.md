@@ -157,6 +157,106 @@ Lead envia mensagem
 
 ---
 
+## Prospecção ativa (cadência D0 / D+3 / D+7)
+
+A Antonela também pode prospectar leads frios em vez de só responder quem chama primeiro. Fluxo:
+
+1. Leads ficam numa planilha do Google Sheets (colunas: telefone, nome, empresa).
+2. `POST /admin/prospect/import` (com header `x-admin-key`) lê a planilha e importa os leads pro Supabase como `pending`.
+3. Um tick periódico (`PROSPECT_TICK_MS`) envia o próximo toque de quem está vencido: D0 → aguarda 3 dias → D+3 → aguarda 4 dias → D+7 (último toque).
+4. Se o lead responder, a cadência para e a Antonela assume a conversa normalmente.
+5. Se o lead responder "PARAR" (ou variações), ele é marcado como `opted_out` e recebe confirmação, sem nunca mais ser contatado.
+
+Crie a tabela no Supabase (SQL Editor) antes de usar:
+
+```sql
+create table prospecting_leads (
+  id uuid primary key default gen_random_uuid(),
+  phone text not null unique,               -- formato "55DDDNUMERO@s.whatsapp.net"
+  name text,
+  company text,
+  status text not null default 'pending',   -- pending | contacted_d0 | contacted_d3 | done | replied | opted_out
+  touch_count int not null default 0,
+  next_touch_at timestamptz not null default now(),
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+```
+
+Variáveis necessárias: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `PROSPECT_SHEET_ID`, `PROSPECT_SHEET_RANGE` (reaproveita `GOOGLE_CREDENTIALS_PATH` já usado pelo Calendar). Sem `SUPABASE_URL`/`SUPABASE_SERVICE_KEY` configurados, a prospecção fica desativada e a Antonela funciona só no modo reativo de sempre.
+
+> **Atenção:** a Evolution API é WhatsApp não oficial (Baileys). Envio em volume para contatos frios pode levar ao banimento do número. Ajuste `PROSPECT_BATCH_SIZE`/`PROSPECT_TICK_MS` com cautela e considere migrar pra WhatsApp Business Cloud API oficial se o volume crescer.
+
+---
+
+## Free Prospecting Intelligence (descoberta de empresas novas, 100% grátis)
+
+Diferente da cadência acima (que trabalha com leads já conhecidos, vindos de planilha), este módulo **descobre** empresas novas por cidade e segmento, usando só fontes gratuitas, e manda cada uma achada pro grupo do WhatsApp **"Phosphor Leads"**.
+
+```http
+POST /admin/prospect/discover
+x-admin-key: SUA_ADMIN_KEY
+Content-Type: application/json
+
+{ "city": "Brasília", "uf": "DF", "segment": "saude", "maxResults": 20 }
+```
+
+`segment` aceita `saude` ou `varejo`. A resposta é imediata (`202`), o processamento roda em background e cada lead aparece no grupo conforme é processado.
+
+### Como funciona (e a limitação real)
+
+Nenhuma das 4 APIs gratuitas de CNPJ (CNPJá, CNPJ.ws, Minha Receita, OpenCNPJ) permite **buscar** empresas por cidade ou CNAE — elas só consultam por CNPJ exato. Sem a base local de Dados Abertos da Receita Federal (dezenas de GB, fica pra uma fase futura), a descoberta em si vem do **OpenStreetMap** (Nominatim pra geocodificar a cidade + Overpass pra achar negócios com as tags do segmento). O CNPJ de cada negócio é obtido tentando extrair do próprio site (regex no HTML, já que empresas brasileiras costumam publicar o CNPJ no rodapé). Quando não há site ou CNPJ visível, o lead ainda é salvo e notificado, mas com `enrichment_status = partial` (sem QSA, sem decisor, score menor).
+
+> Os 4 providers (`src/cnpjProviders.js`) e o Overpass/Nominatim (`src/discovery.js`) foram testados ao vivo com CNPJs e cidades reais durante o desenvolvimento — os mapeamentos de campo batem com as respostas reais observadas. A extração de CNPJ do site (`src/companyIntel.js`) valida o dígito verificador antes de aceitar qualquer match, pra não confundir CNPJ real com placeholder de máscara de formulário (ex: `00000000000000`, comum em campos de formulário vazios).
+
+### Comando `/empresa` no grupo "Phosphor Leads"
+
+Além da descoberta automática, dá pra consultar uma empresa específica digitando no próprio grupo:
+
+```
+/empresa Clinica Sabin
+/empresa sabin.com.br
+/empresa 19131243000197
+```
+
+O sistema detecta sozinho se você mandou CNPJ, site ou nome. Pra nome, a busca é restrita à cidade de `PROSPECT_TARGET_CITY`/`PROSPECT_TARGET_UF` (uma busca sem cidade, em todo o Brasil, foi testada e dá timeout no servidor público do Overpass). O bot responde no mesmo grupo com um card contendo CNPJ, razão social, contato, site, Instagram (se achado no site), decisor provável, score e um resumo da empresa.
+
+### Schema Supabase
+
+```sql
+create table company_leads (
+  id uuid primary key default gen_random_uuid(),
+  cnpj text unique,
+  razao_social text,
+  nome_fantasia text,
+  telefone text,
+  email text,
+  website text,
+  instagram text,
+  cnae_principal text,
+  cnae_descricao text,
+  cidade text,
+  uf text,
+  endereco text,
+  decision_maker_name text,
+  decision_maker_role text,
+  decision_maker_confidence numeric,
+  fit_score int,
+  suggested_message text,
+  source text,                               -- overpass | cnpja | cnpjws | minhareceita | opencnpj | site
+  enrichment_status text default 'pending',  -- pending | enriched | failed | partial
+  notified boolean default false,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+```
+
+Variáveis necessárias: `LEADS_GROUP_JID` (grupo "Phosphor Leads" — também é o único grupo onde o comando `/empresa` é aceito), `PROSPECT_TARGET_CITY`/`PROSPECT_TARGET_UF` (bônus de score e cidade usada na busca por nome), `PROSPECT_CONTACT_EMAIL` (exigido pela política de uso do Nominatim). Reaproveita `SUPABASE_URL`/`SUPABASE_SERVICE_KEY` já configurados pra cadência.
+
+Nenhuma mensagem é enviada automaticamente ao lead — o texto sugerido só vai pro grupo interno, para aprovação humana antes de qualquer contato.
+
+---
+
 ## Notificações do time
 
 Configure ao menos um canal em `.env`:
