@@ -196,7 +196,14 @@ app.post("/webhook/evolution", async (req, res) => {
     const msg = payload.data;
     if (!msg) return;
 
-    if (msg.key?.fromMe) return;
+    const remoteJid = msg.key.remoteJid;
+    const isLeadsGroup = remoteJid === process.env.LEADS_GROUP_JID;
+
+    // Ignora as próprias mensagens do bot, EXCETO no grupo de leads: lá o dono
+    // (que costuma operar do mesmo número que roda o bot) precisa poder mandar
+    // comandos. Os comandos têm regex própria, então as notificações que o bot
+    // manda pro grupo (cards, resumos) não casam e não geram loop.
+    if (msg.key?.fromMe && !isLeadsGroup) return;
 
     const msgId = msg.key?.id;
     if (msgId) {
@@ -207,11 +214,9 @@ app.post("/webhook/evolution", async (req, res) => {
       markProcessed(msgId);
     }
 
-    const remoteJid = msg.key.remoteJid;
-
     if (remoteJid?.includes("@g.us")) {
       // Comandos aceitos em grupo, só no Phosphor Leads
-      if (remoteJid === process.env.LEADS_GROUP_JID) {
+      if (isLeadsGroup) {
         const groupText = msg.message?.conversation ?? msg.message?.extendedTextMessage?.text ?? null;
         if (groupText && isEmpresaCommand(groupText)) {
           await handleEmpresaCommand(groupText);
