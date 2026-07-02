@@ -1,6 +1,6 @@
 import { logger } from "./logger.js";
 import { searchByName } from "./discovery.js";
-import { buildLead, formatLeadCard, isValidCnpj, runDiscovery, toStructuredOutput } from "./companyIntel.js";
+import { buildLead, formatLeadCard, isValidCnpj, runDiscovery, toStructuredOutput, MAJOR_CITIES } from "./companyIntel.js";
 import { cnaeFromEnv, resolveNiche, supportedNicheLabels } from "./niches.js";
 import { prospectingEnabled, upsertCompanyLead } from "./supabase.js";
 import { notifyLeadsGroup } from "./notify.js";
@@ -101,25 +101,22 @@ export async function handleProspectingCommand(text) {
     return;
   }
 
-  const city = process.env.PROSPECT_TARGET_CITY || "Brasília";
-  const uf = process.env.PROSPECT_TARGET_UF || "DF";
   const cnae = cnaeFromEnv(command.niche);
   const capNotice = command.capped ? ` Limitei em ${command.maxResults} para não pesar nas fontes gratuitas.` : "";
 
   await notifyLeadsGroup(
-    `Fechado. Vou prospectar ${command.maxResults} empresas do nicho ${command.niche.shortLabel} em ${city}/${uf}.${capNotice}\nVou mandando os leads aqui conforme encontrar.`,
+    `Fechado. Vou prospectar ${command.maxResults} empresas do nicho ${command.niche.shortLabel} pelo Brasil.${capNotice}\nVou mandando os leads aqui conforme encontrar.`,
   );
 
   runDiscovery({
-    city,
-    uf,
     segment: command.niche.segment,
     cnae,
     maxResults: command.maxResults,
+    cities: MAJOR_CITIES,
   })
     .then(async ({ found }) => {
       if (found === 0) {
-        await notifyLeadsGroup(`Não encontrei empresas do nicho ${command.niche.shortLabel} em ${city}/${uf} nessa rodada.`);
+        await notifyLeadsGroup(`Não encontrei empresas do nicho ${command.niche.shortLabel} nessa rodada.`);
       }
     })
     .catch(async (err) => {

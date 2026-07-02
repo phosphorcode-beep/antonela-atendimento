@@ -528,27 +528,53 @@ export function formatLeadCard(lead) {
     .join(`\n${divider}\n`);
 }
 
-// ── Ponto de entrada: descoberta em cascata (Overpass + brasil.io), dedup,
-// processa cada candidato e fecha com um resumo da rodada no grupo ──────────
-export async function runDiscovery({ city, uf, segment, cnae, maxResults = 20 }) {
-  logger.info({ city, uf, segment, cnae, maxResults }, "🔎 Iniciando descoberta de leads");
+// ── Maiores cidades/metrópoles do Brasil, usadas quando a rodada é nacional
+// (sem cidade fixa). Cobre as 5 regiões pra espalhar os leads pelo país ─────
+export const MAJOR_CITIES = [
+  ["São Paulo", "SP"], ["Rio de Janeiro", "RJ"], ["Belo Horizonte", "MG"],
+  ["Curitiba", "PR"], ["Porto Alegre", "RS"], ["Goiânia", "GO"],
+  ["Salvador", "BA"], ["Fortaleza", "CE"], ["Recife", "PE"],
+  ["Brasília", "DF"], ["Campinas", "SP"], ["Manaus", "AM"],
+  ["Belém", "PA"], ["Florianópolis", "SC"], ["Vitória", "ES"],
+];
 
-  const { boundingbox } = await geocodeCity(city, uf);
+function shuffle(list) {
+  const a = [...list];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// ── Ponto de entrada: descoberta em cascata (Overpass + brasil.io), dedup,
+// processa cada candidato e fecha com um resumo da rodada no grupo. Aceita uma
+// cidade única (`city`/`uf`) ou uma lista `cities` (rodada nacional: gira por
+// várias cidades, pegando um punhado de cada até juntar candidatos) ─────────
+export async function runDiscovery({ city, uf, segment, cnae, maxResults = 20, cities = null }) {
+  const nationwide = Array.isArray(cities) && cities.length > 0;
+  logger.info({ city, uf, segment, cnae, maxResults, nationwide }, "🔎 Iniciando descoberta de leads");
+
+  const targets = nationwide ? shuffle(cities) : [[city, uf]];
+  const perCity = nationwide ? Math.max(2, Math.ceil(maxResults / 5)) : maxResults;
+
   let overpassResults = [];
-  try {
-    overpassResults = await searchBusinesses({ boundingbox, segment, maxResults });
-    overpassResults = overpassResults.map((business) => ({
-      ...business,
-      cidade: business.cidade || city,
-      uf: business.uf || uf,
-    }));
-  } catch (err) {
-    logger.warn({ err: err.message, segment }, "Overpass falhou; seguindo com outras fontes disponíveis");
+  for (const [c, u] of targets) {
+    if (overpassResults.length >= maxResults * 2) break; // já há candidatos de sobra
+    try {
+      const { boundingbox } = await geocodeCity(c, u);
+      let r = await searchBusinesses({ boundingbox, segment, maxResults: perCity });
+      r = r.map((business) => ({ ...business, cidade: business.cidade || c, uf: business.uf || u }));
+      overpassResults.push(...r);
+    } catch (err) {
+      logger.warn({ err: err.message, city: c, uf: u, segment }, "Geocode/Overpass falhou pra cidade; seguindo");
+    }
   }
 
   let brasilioResults = [];
   if (cnae && brasilioEnabled()) {
-    brasilioResults = await searchByCnae({ cnae, municipio: city, uf, maxResults });
+    const [bc, bu] = targets[0];
+    brasilioResults = await searchByCnae({ cnae, municipio: bc, uf: bu, maxResults });
   }
 
   const businesses = dedupCandidates([...overpassResults, ...brasilioResults]).slice(0, maxResults);
