@@ -83,6 +83,7 @@ function mapOverpassElements(elements, maxResults) {
         endereco: [t["addr:street"], t["addr:housenumber"], t["addr:suburb"]].filter(Boolean).join(", ") || null,
         lat: el.lat ?? el.center?.lat ?? null,
         lon: el.lon ?? el.center?.lon ?? null,
+        source: "overpass",
       };
     })
     .filter(Boolean);

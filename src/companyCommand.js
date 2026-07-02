@@ -51,11 +51,11 @@ export async function handleEmpresaCommand(text) {
 
 async function resolveLead(query) {
   if (query.type === "cnpj") {
-    return buildLead({ nome: null, telefone: null, website: null, endereco: null, cnpj: query.value }, null);
+    return buildLead({ nome: null, telefone: null, website: null, endereco: null, cnpj: query.value, source: "manual-cnpj" }, null);
   }
 
   if (query.type === "website") {
-    return buildLead({ nome: null, telefone: null, website: query.value, endereco: null }, null);
+    return buildLead({ nome: null, telefone: null, website: query.value, endereco: null, source: "manual-site" }, null);
   }
 
   // Nome: busca best-effort restrita à cidade-alvo (ver PROSPECT_TARGET_CITY/UF)

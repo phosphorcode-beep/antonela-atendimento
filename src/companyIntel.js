@@ -174,7 +174,7 @@ export async function buildLead(business, segment) {
     decisionMakerName: decisionMaker.nome,
     decisionMakerRole: decisionMaker.qualificacao,
     decisionMakerConfidence: decisionMaker.confidence,
-    source: enriched?.source || "overpass",
+    source: enriched?.source || business.source || "unknown",
     enrichmentStatus: enriched ? "enriched" : cnpj ? "failed" : "partial",
   };
 
