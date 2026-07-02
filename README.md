@@ -205,12 +205,12 @@ Content-Type: application/json
 
 ### Como funciona (descoberta em cascata + limitações reais)
 
-Nenhuma das 4 APIs gratuitas de CNPJ (CNPJá, CNPJ.ws, Minha Receita, OpenCNPJ) permite **buscar** empresas por cidade ou CNAE — elas só consultam por CNPJ exato. A descoberta em si combina duas fontes gratuitas, na ordem:
+Nenhuma das 5 APIs gratuitas de CNPJ (CNPJá, BrasilAPI, CNPJ.ws, Minha Receita, OpenCNPJ) permite **buscar** empresas por cidade ou CNAE — elas só consultam por CNPJ exato. A descoberta em si combina duas fontes gratuitas, na ordem:
 
 1. **OpenStreetMap** (Nominatim + Overpass) — bom pra negócio físico, busca por tags do segmento dentro da cidade.
 2. **brasil.io** (opcional, precisa de `BRASILIO_API_TOKEN`) — busca por CNAE + município direto nos Dados Abertos da Receita Federal. É o único jeito gratuito de buscar por CNAE; sem token, a descoberta cai só pro Overpass.
 
-Os candidatos das duas fontes são deduplicados (por CNPJ, ou por nome normalizado quando não há CNPJ) antes de gastar esforço enriquecendo. Pra cada candidato: o CNPJ é extraído do próprio site quando não veio pronto (regex no HTML da home e, se não achar, também em `/politica-de-privacidade` e `/termos-de-uso` — testado com um caso real onde o CNPJ só aparecia nessas páginas), do site também são raspados **e-mail, telefone e WhatsApp** (`mailto:`, `tel:`, `wa.me`) pra acionar leads que só têm site, o CNPJ é enriquecido via os 4 providers (razão social, QSA, situação, **porte e capital social**), e opcionalmente (com `BRAVE_API_KEY`) uma busca web tenta achar Instagram, LinkedIn e menções ao decisor, cruzando o nome achado com o QSA — decisor confirmado em 2 fontes independentes (QSA + LinkedIn/menção web) sobe a confiança pra "alta". Quando não há site nem CNPJ visível, o lead ainda é salvo e notificado, mas com `enrichment_status = partial` e a lacuna registrada.
+Os candidatos das duas fontes são deduplicados (por CNPJ, ou por nome normalizado quando não há CNPJ) antes de gastar esforço enriquecendo. Pra cada candidato: o CNPJ é extraído do próprio site quando não veio pronto (regex no HTML da home e, se não achar, também em `/politica-de-privacidade` e `/termos-de-uso` — testado com um caso real onde o CNPJ só aparecia nessas páginas), do site também são raspados **e-mail, telefone e WhatsApp** (`mailto:`, `tel:`, `wa.me`) pra acionar leads que só têm site, o CNPJ é enriquecido via os 5 providers (razão social, QSA, situação, **porte e capital social**), e opcionalmente (com `BRAVE_API_KEY`) uma busca web tenta achar Instagram, LinkedIn e menções ao decisor, cruzando o nome achado com o QSA — decisor confirmado em 2 fontes independentes (QSA + LinkedIn/menção web) sobe a confiança pra "alta". Quando não há site nem CNPJ visível, o lead ainda é salvo e notificado, mas com `enrichment_status = partial` e a lacuna registrada.
 
 **Filtro de tamanho (foco em PME/MEI):** quando o porte é conhecido (via CNPJ enriquecido ou brasil.io), empresas grandes são descartadas antes de salvar/notificar — o padrão aceita MEI/ME/EPP e descarta "Demais" (`PROSPECT_MAX_PORTE`, default `EPP`), com um teto de capital social pra pegar as grandes que escapam do porte (`PROSPECT_MAX_CAPITAL_SOCIAL`, default R$ 10 mi). O resumo da rodada informa quantas foram descartadas. **Importante:** o Overpass sozinho não traz porte nem CNPJ, então o filtro só é efetivo com `BRASILIO_API_TOKEN` configurado (ou quando o CNPJ é achado no site do candidato). Sem dado de porte, o lead é mantido e marcado com a lacuna "porte não confirmado", pra revisão humana.
 
@@ -222,7 +222,7 @@ Cada lead recebe:
 
 Além do card no WhatsApp (formato humano), cada lead processado é logado em JSON estruturado (`logger.info`, evento "📊 Lead processado") no schema `{ nicho, empresa, cnpj, site, telefone, whatsapp, instagram, linkedin, decisor_nome, decisor_cargo, porte, capital_social, fontes, confianca, tier, lacunas, dor_principal, oferta }` — útil pra consumir os resultados de outro sistema depois, sem precisar de endpoint novo.
 
-> Os 4 providers (`src/cnpjProviders.js`) e o Overpass/Nominatim (`src/discovery.js`) foram testados ao vivo com CNPJs e cidades reais durante o desenvolvimento — os mapeamentos de campo batem com as respostas reais observadas. A extração de CNPJ do site (`src/companyIntel.js`) valida o dígito verificador antes de aceitar qualquer match, pra não confundir CNPJ real com placeholder de máscara de formulário (ex: `00000000000000`, comum em campos de formulário vazios).
+> Os 5 providers (`src/cnpjProviders.js`, incluindo a BrasilAPI — que exige User-Agent de browser, senão a Cloudflare devolve 403) e o Overpass/Nominatim (`src/discovery.js`) foram testados ao vivo com CNPJs e cidades reais durante o desenvolvimento — os mapeamentos de campo batem com as respostas reais observadas. A extração de CNPJ do site (`src/companyIntel.js`) valida o dígito verificador antes de aceitar qualquer match, pra não confundir CNPJ real com placeholder de máscara de formulário (ex: `00000000000000`, comum em campos de formulário vazios).
 >
 > **`src/brasilioProvider.js` e `src/braveSearch.js` não foram testados ao vivo** — as duas APIs exigem token/chave que este ambiente de desenvolvimento não tinha. Os nomes de campo do brasil.io seguem o padrão dos Dados Abertos da Receita (mesma origem da Minha Receita), mas confira na primeira execução real e ajuste `firstOf(...)` se precisar.
 
@@ -279,7 +279,7 @@ create table company_leads (
   decision_maker_confidence numeric,
   fit_score int,
   suggested_message text,
-  source text,                               -- overpass | brasilio | cnpja | cnpjws | minhareceita | opencnpj | manual-site | manual-cnpj | inbound-whatsapp | inbound-site
+  source text,                               -- overpass | brasilio | cnpja | brasilapi | cnpjws | minhareceita | opencnpj | manual-site | manual-cnpj | inbound-whatsapp | inbound-site
   segment text,                              -- industria | distribuidora | servicos_campo | clinicas | franquias | agro (null em /empresa manual)
   fontes jsonb,                              -- ex: ["overpass","cnpja","qsa","brave-linkedin"]
   lacunas jsonb,                             -- ex: ["telefone não encontrado"]

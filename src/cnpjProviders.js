@@ -161,6 +161,42 @@ async function fetchMinhaReceita(cnpj) {
   };
 }
 
+// ── BrasilAPI (brasilapi.com.br) — espelho dos Dados Abertos da Receita.
+// Exige User-Agent de browser (Cloudflare bloqueia UA não-browser com 403). ──
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36";
+
+async function fetchBrasilApi(cnpj) {
+  await throttle("brasilapi", 3_000);
+  const data = await fetchWithRetry(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, {
+    headers: { "User-Agent": BROWSER_UA, Accept: "application/json" },
+  });
+  if (!data) return null;
+
+  return {
+    razaoSocial: firstOf(data, ["razao_social"]),
+    nomeFantasia: firstOf(data, ["nome_fantasia"]),
+    telefone: normalizePhone(firstOf(data, ["ddd_telefone_1"])),
+    email: lower(firstOf(data, ["email"])),
+    cnaePrincipal: firstOf(data, ["cnae_fiscal"]),
+    cnaeDescricao: firstOf(data, ["cnae_fiscal_descricao"]),
+    cidade: firstOf(data, ["municipio"]),
+    uf: firstOf(data, ["uf"]),
+    endereco: firstOf(data, ["logradouro"]),
+    matriz: firstOf(data, ["identificador_matriz_filial"]) === 1,
+    porteCode: firstOf(data, ["codigo_porte"]),
+    porteText: firstOf(data, ["porte", "descricao_porte"]),
+    capitalSocial: firstOf(data, ["capital_social"]),
+    mei: firstOf(data, ["opcao_pelo_mei"]) === true,
+    situacaoAtiva: isAtiva(firstOf(data, ["descricao_situacao_cadastral"])),
+    qsa: normalizeQsa(data.qsa, {
+      nome: ["nome_socio"],
+      qualificacao: ["qualificacao_socio"],
+    }),
+    source: "brasilapi",
+  };
+}
+
 // ── OpenCNPJ — 100 req/min ─────────────────────────────────────────────────────
 async function fetchOpenCnpj(cnpj) {
   await throttle("opencnpj", 700);
@@ -192,7 +228,7 @@ async function fetchOpenCnpj(cnpj) {
   };
 }
 
-const PROVIDERS = [fetchCnpja, fetchCnpjWs, fetchMinhaReceita, fetchOpenCnpj];
+const PROVIDERS = [fetchCnpja, fetchBrasilApi, fetchCnpjWs, fetchMinhaReceita, fetchOpenCnpj];
 
 // ── Tenta cada provider em ordem até um responder ─────────────────────────────
 export async function enrichByCnpj(cnpj) {
