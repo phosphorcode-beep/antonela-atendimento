@@ -199,6 +199,19 @@ app.post("/webhook/evolution", async (req, res) => {
     const remoteJid = msg.key.remoteJid;
     const isLeadsGroup = remoteJid === process.env.LEADS_GROUP_JID;
 
+    // 🔬 DEBUG TEMPORÁRIO: registra toda mensagem recebida pra diagnosticar
+    // por que comandos de grupo não disparam. Remover depois do diagnóstico.
+    logger.info(
+      {
+        remoteJid,
+        fromMe: msg.key?.fromMe ?? null,
+        isLeadsGroup,
+        leadsJid: process.env.LEADS_GROUP_JID,
+        text: msg.message?.conversation ?? msg.message?.extendedTextMessage?.text ?? "(sem texto)",
+      },
+      "🔬 webhook recebido (debug)",
+    );
+
     // Ignora as próprias mensagens do bot, EXCETO no grupo de leads: lá o dono
     // (que costuma operar do mesmo número que roda o bot) precisa poder mandar
     // comandos. Os comandos têm regex própria, então as notificações que o bot
