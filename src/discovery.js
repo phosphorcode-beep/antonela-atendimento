@@ -9,15 +9,54 @@ function userAgent() {
 }
 
 // ── Tags OSM por segmento ──────────────────────────────────────────────────────
+const CLINICAS_TAGS = [
+  ["amenity", "clinic"],
+  ["amenity", "doctors"],
+  ["amenity", "dentist"],
+  ["amenity", "hospital"],
+  ["amenity", "pharmacy"],
+  ["healthcare", "*"],
+  ["shop", "beauty"],
+];
+
 const SEGMENT_TAGS = {
-  saude: [
-    ["amenity", "clinic"],
-    ["amenity", "doctors"],
-    ["amenity", "dentist"],
-    ["amenity", "hospital"],
-    ["amenity", "pharmacy"],
-    ["healthcare", "*"],
+  industria: [
+    ["industrial", "*"],
+    ["man_made", "works"],
+    ["building", "industrial"],
+    ["landuse", "industrial"],
   ],
+  distribuidora: [
+    ["shop", "wholesale"],
+    ["shop", "trade"],
+    ["building", "warehouse"],
+    ["industrial", "warehouse"],
+    ["office", "logistics"],
+  ],
+  servicos_campo: [
+    ["craft", "electrician"],
+    ["craft", "plumber"],
+    ["craft", "hvac"],
+    ["craft", "carpenter"],
+    ["craft", "roofer"],
+    ["shop", "doityourself"],
+  ],
+  clinicas: CLINICAS_TAGS,
+  franquias: [
+    ["shop", "*"],
+    ["amenity", "restaurant"],
+    ["amenity", "fast_food"],
+    ["amenity", "cafe"],
+    ["leisure", "fitness_centre"],
+  ],
+  agro: [
+    ["shop", "agrarian"],
+    ["shop", "farm"],
+    ["industrial", "food"],
+    ["craft", "winery"],
+    ["man_made", "silo"],
+  ],
+  saude: CLINICAS_TAGS,
   varejo: [
     ["shop", "*"],
   ],

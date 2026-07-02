@@ -4,6 +4,7 @@ import { geocodeCity, searchBusinesses } from "./discovery.js";
 import { brasilioEnabled, searchByCnae } from "./brasilioProvider.js";
 import { braveSearchEnabled, findSocialLinks, findDecisionMakerMention } from "./braveSearch.js";
 import { computeConfidence, computeTier } from "./confidence.js";
+import { getNicheProfile } from "./niches.js";
 import { upsertCompanyLead } from "./supabase.js";
 import { notifyLeadsGroup } from "./notify.js";
 
@@ -115,9 +116,10 @@ export function inferDecisionMaker(qsa) {
 // ── Score de oportunidade (0-100) ─────────────────────────────────────────────
 export function calculateFitScore(lead, segment) {
   const targetCity = (process.env.PROSPECT_TARGET_CITY || "Brasília").toLowerCase();
+  const profile = getNicheProfile(segment);
   let score = 0;
 
-  if (segment === "saude") score += 25;
+  if (profile) score += profile.priority <= 2 ? 30 : 25;
   if ((lead.cidade || "").toLowerCase().includes(targetCity)) score += 15;
   if (lead.situacaoAtiva === true || lead.situacaoAtiva === null) score += 10;
   if (lead.nomeFantasia) score += 10;
@@ -130,14 +132,9 @@ export function calculateFitScore(lead, segment) {
   return Math.min(score, 100);
 }
 
-const DOR_HIPOTESE = {
-  saude: "agenda, atendimento e follow-up de pacientes",
-  varejo: "estoque, vendas e atendimento",
-};
-
 function segmentLabel(segment) {
-  if (segment === "saude") return "saúde";
-  if (segment === "varejo") return "varejo";
+  const profile = getNicheProfile(segment);
+  if (profile) return profile.label;
   return "sua área de atuação";
 }
 
@@ -150,11 +147,12 @@ export function buildOutreachMessage(lead, segment) {
   const nome = lead.decisionMakerName ? lead.decisionMakerName.split(/\s+/)[0] : null;
   const empresa = lead.nomeFantasia || lead.razaoSocial;
   const local = lead.cidade ? ` em ${lead.cidade}` : "";
-  const dor = DOR_HIPOTESE[segment] || "atendimento e operação";
+  const profile = getNicheProfile(segment);
+  const dor = profile?.outreachPain || "operação, controle e rastreabilidade";
 
   const saudacao = nome ? `Olá, ${nome}.` : "Olá.";
 
-  return `${saudacao} Encontrei ${empresa}${local} e pensei em uma forma simples de melhorar ${dor}. A Phosphorcode cria sistemas sob medida para tirar retrabalho da operação. Posso te mandar uma ideia rápida?`;
+  return `${saudacao} Vi a ${empresa}${local}. Pode haver espaço para ganhar controle em ${dor}. A Phosphorcode cria sistemas sob medida para empresas que cresceram mais rápido que os processos. Posso te mandar uma ideia rápida?`;
 }
 
 // ── Compara dois nomes de forma tolerante (case/acento/ordem de palavras) pra
@@ -241,6 +239,7 @@ export async function buildLead(business, segment) {
   if (!decisionMaker.nome) lacunas.push("decisor não confirmado");
 
   const lead = {
+    segment,
     cnpj: cnpj || null,
     razaoSocial: enriched?.razaoSocial || business.razaoSocial || null,
     nomeFantasia: enriched?.nomeFantasia || business.nome || null,
@@ -281,7 +280,9 @@ export async function buildLead(business, segment) {
 // ── Saída no schema estruturado pedido (JSON, pra log/consumo por outro sistema
 // depois — o card do WhatsApp continua sendo a versão humana) ───────────────
 export function toStructuredOutput(lead) {
+  const profile = getNicheProfile(lead.segment);
   return {
+    nicho: profile?.label ?? null,
     empresa: lead.nomeFantasia || lead.razaoSocial || null,
     cnpj: lead.cnpj,
     site: lead.website,
@@ -295,6 +296,8 @@ export function toStructuredOutput(lead) {
     confianca: lead.confianca,
     tier: lead.tier,
     lacunas: lead.lacunas,
+    dor_principal: profile?.pain ?? null,
+    oferta: profile?.offer ?? null,
   };
 }
 
@@ -387,10 +390,18 @@ export function formatLeadCard(lead) {
   const divider = "───────────────────";
   const titulo = lead.nomeFantasia || lead.razaoSocial || domainFallback(lead.website) || "Empresa não identificada";
   const local = [lead.cidade, lead.uf].filter(Boolean).join("/");
+  const profile = getNicheProfile(lead.segment);
 
   const sections = [];
 
   sections.push([`🏢 *${titulo}*`, `📝 ${lead.summary}`]);
+
+  if (profile) {
+    sections.push([
+      `🎯 *Dor provável:* ${profile.pain}`,
+      `🧩 *Oferta:* ${profile.offer}`,
+    ]);
+  }
 
   sections.push(
     [
@@ -438,7 +449,17 @@ export async function runDiscovery({ city, uf, segment, cnae, maxResults = 20 })
   logger.info({ city, uf, segment, cnae, maxResults }, "🔎 Iniciando descoberta de leads");
 
   const { boundingbox } = await geocodeCity(city, uf);
-  const overpassResults = await searchBusinesses({ boundingbox, segment, maxResults });
+  let overpassResults = [];
+  try {
+    overpassResults = await searchBusinesses({ boundingbox, segment, maxResults });
+    overpassResults = overpassResults.map((business) => ({
+      ...business,
+      cidade: business.cidade || city,
+      uf: business.uf || uf,
+    }));
+  } catch (err) {
+    logger.warn({ err: err.message, segment }, "Overpass falhou; seguindo com outras fontes disponíveis");
+  }
 
   let brasilioResults = [];
   if (cnae && brasilioEnabled()) {
