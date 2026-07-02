@@ -59,15 +59,29 @@ export async function fetchSiteHtml(website) {
   }
 }
 
+// Páginas onde CNPJ costuma aparecer quando não está na home (LGPD obriga
+// política de privacidade, e ela quase sempre lista a razão social/CNPJ) ─────
+const CNPJ_FALLBACK_PATHS = ["/politica-de-privacidade", "/termos-de-uso"];
+
 // ── Extrai os sinais disponíveis no site: CNPJ (validado) e Instagram ───────
 export async function extractSiteSignals(website) {
-  const html = await fetchSiteHtml(website);
-  if (!html) return { cnpj: null, instagram: null };
+  const homeHtml = await fetchSiteHtml(website);
+  if (!homeHtml) return { cnpj: null, instagram: null };
 
-  return {
-    cnpj: extractCnpjFromHtml(html),
-    instagram: extractInstagramFromHtml(html),
-  };
+  const instagram = extractInstagramFromHtml(homeHtml);
+  let cnpj = extractCnpjFromHtml(homeHtml);
+
+  if (!cnpj) {
+    const base = website.replace(/\/$/, "");
+    for (const path of CNPJ_FALLBACK_PATHS) {
+      const html = await fetchSiteHtml(`${base}${path}`);
+      if (!html) continue;
+      cnpj = extractCnpjFromHtml(html);
+      if (cnpj) break;
+    }
+  }
+
+  return { cnpj, instagram };
 }
 
 // ── Prioridade de qualificação pra inferir o decisor provável ─────────────────
