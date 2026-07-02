@@ -127,7 +127,7 @@ function segmentLabel(segment) {
 // ── Mensagem consultiva (template fixo, tom Antonela: sem travessão) ──────────
 export function buildOutreachMessage(lead, segment) {
   const nome = lead.decisionMakerName ? lead.decisionMakerName.split(/\s+/)[0] : null;
-  const empresa = lead.nomeFantasia || lead.razaoSocial || "sua empresa";
+  const empresa = lead.nomeFantasia || lead.razaoSocial || domainFallback(lead.website) || "sua empresa";
   const cidade = lead.cidade || "sua cidade";
   const dor = DOR_HIPOTESE[segment] || "atendimento e operação";
 
@@ -198,7 +198,7 @@ export async function processCompany(business, segment) {
 
 // ── Resumo factual da empresa (não é a abordagem de venda, é a "ficha" do lead) ──
 export function buildCompanySummary(lead, segment) {
-  const empresa = lead.nomeFantasia || lead.razaoSocial || "Empresa não identificada";
+  const empresa = lead.nomeFantasia || lead.razaoSocial || domainFallback(lead.website) || "Empresa não identificada";
   const atividade = lead.cnaeDescricao || segmentLabel(segment);
   const local = [lead.cidade, lead.uf].filter(Boolean).join("/") || "localização não identificada";
   const situacao = lead.situacaoAtiva === true ? "ativa" : lead.situacaoAtiva === false ? "inativa" : "situação não confirmada";
@@ -207,9 +207,14 @@ export function buildCompanySummary(lead, segment) {
 }
 
 // ── Card visual pro grupo (usado tanto na descoberta automática quanto no /empresa) ──
+function domainFallback(website) {
+  if (!website) return null;
+  return website.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+}
+
 export function formatLeadCard(lead) {
   const divider = "───────────────────";
-  const titulo = lead.nomeFantasia || lead.razaoSocial || "Empresa não identificada";
+  const titulo = lead.nomeFantasia || lead.razaoSocial || domainFallback(lead.website) || "Empresa não identificada";
 
   const lines = [
     `🏢 *${titulo}*`,
