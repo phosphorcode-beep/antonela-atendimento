@@ -4,6 +4,8 @@ import { logger } from "./logger.js";
 import { notifyTeam, notifyGroup } from "./notify.js";
 import { chatCompletion } from "./llm.js";
 import { calendarEnabled, createMeeting, TZ } from "./calendar.js";
+import { classifyNiche, getNicheProfile } from "./niches.js";
+import { prospectingEnabled, upsertInboundLead } from "./supabase.js";
 
 // ── Intenções reconhecidas ────────────────────────────────────────────────────
 const INTENTS = ["[AGENDAR]", "[SUPORTE]", "[ESCALAR]", "[LEAD_QUALIFICADO]"];
@@ -191,20 +193,83 @@ async function handleEscalar({ phone, name, history, instance }) {
   logger.info({ phone }, "🧑 Atendimento humano solicitado (bot continua ativo)");
 }
 
-// ── LEAD_QUALIFICADO: salva lead no CRM/planilha ─────────────────────────────
+// ── LEAD_QUALIFICADO: extrai dados, persiste no Supabase (dedup por telefone) e
+// notifica o grupo comercial + canais do time ────────────────────────────────
 async function handleLeadQualificado({ phone, name, history }) {
-  // Extrai dados do histórico para o CRM
-  const context = history
-    .filter((m) => m.role === "user")
-    .map((m) => m.content)
-    .join(" ");
+  const extracted = await extractQualifiedLead({ history, fallbackName: name });
+  const profile = extracted.segment ? getNicheProfile(extracted.segment) : null;
 
-  await notifyTeam({
-    type: "LEAD_QUALIFICADO",
-    phone,
-    name,
-    message: `Novo lead qualificado!\n\nNome: ${name}\nTelefone: ${phone}\nContexto: ${context.slice(0, 500)}`,
-  });
+  let saved = null;
+  if (prospectingEnabled()) {
+    saved = await upsertInboundLead({
+      phone,
+      name: extracted.name || name,
+      company: extracted.company || null,
+      segment: extracted.segment || null,
+      source: "inbound-whatsapp",
+      lacunas: buildInboundLacunas(extracted),
+    });
+  }
 
-  logger.info({ phone, name }, "🎉 Lead qualificado registrado");
+  const persistLine = !prospectingEnabled()
+    ? `(banco não configurado, só notificação)`
+    : saved
+      ? `💾 Salvo em company_leads`
+      : `⚠️ Falha ao salvar no banco, confirmar manualmente`;
+
+  const message = [
+    `🎉 *LEAD QUALIFICADO* — Phosphorcode`,
+    ``,
+    `👤 ${extracted.name || name}`,
+    `🏢 ${extracted.company || "-"}`,
+    `📱 ${phone.split("@")[0]}`,
+    `🎯 Nicho: ${profile ? profile.label : "não identificado"}`,
+    extracted.pain ? `📝 Dor: ${extracted.pain}` : null,
+    ``,
+    persistLine,
+  ].filter((line) => line !== null).join("\n");
+
+  await notifyGroup(message);
+  await notifyTeam({ type: "LEAD_QUALIFICADO", phone, name: extracted.name || name, message });
+
+  logger.info(
+    { phone, name: extracted.name || name, segment: extracted.segment || null, saved: Boolean(saved) },
+    "🎉 Lead qualificado registrado",
+  );
+}
+
+// ── Extrai nome, empresa, nicho e dor da conversa (JSON via LLM) ──────────────
+async function extractQualifiedLead({ history, fallbackName }) {
+  const system = `Você extrai dados de qualificação de uma conversa de atendimento comercial.
+Responda APENAS com um JSON válido, sem texto antes ou depois, neste formato exato:
+{"name":"","company":"","segment":"","pain":""}
+Regras:
+- "name": primeiro nome ou nome completo da pessoa. "company": nome da empresa dela.
+- "segment": classifique em UM destes valores exatos, só quando houver evidência clara: industria, distribuidora, servicos_campo, clinicas, franquias, agro. Sem evidência, use "".
+- "pain": principal dor operacional citada, em poucas palavras.
+- Qualquer campo sem informação clara = "".`;
+
+  try {
+    const raw = await chatCompletion({ system, messages: history.slice(-14) });
+    const data = JSON.parse(raw.replace(/```json|```/g, "").trim());
+    if (!data.name) data.name = fallbackName;
+
+    // Se o modelo devolveu um segment fora do enum, tenta reclassificar pelo texto.
+    if (data.segment && !getNicheProfile(data.segment)) {
+      data.segment = classifyNiche(data.segment)?.segment ?? "";
+    }
+    return data;
+  } catch (err) {
+    logger.error({ err }, "Falha ao extrair dados do lead qualificado");
+    // Fallback: classifica o nicho a partir do texto do lead, sem depender de JSON.
+    const text = history.filter((m) => m.role === "user").map((m) => m.content).join(" ");
+    return { name: fallbackName, company: "", segment: classifyNiche(text)?.segment ?? "", pain: "" };
+  }
+}
+
+function buildInboundLacunas(extracted) {
+  const lacunas = [];
+  if (!extracted.company) lacunas.push("empresa não informada");
+  if (!extracted.segment) lacunas.push("nicho não identificado");
+  return lacunas.length ? lacunas : null;
 }

@@ -3,6 +3,8 @@ import { getHistory, saveHistory } from "./history.js";
 import { sendWhatsAppMessage } from "./evolution.js";
 import { detectIntent, handleIntent } from "./intent.js";
 import { notifyGroup } from "./notify.js";
+import { classifyNiche } from "./niches.js";
+import { prospectingEnabled, upsertInboundLead } from "./supabase.js";
 import { logger } from "./logger.js";
 
 // ── System prompt da Antonela ─────────────────────────────────────────────────
@@ -116,12 +118,14 @@ export async function handleIncomingMessage({ phone, name, text, instance }) {
 // ── Lead vindo do formulário do site (envio automático, sem wa.me) ────────────
 export async function handleSiteForm({ nome, empresa, email, telefone, funcionarios, mensagem }) {
   const instance = process.env.EVOLUTION_INSTANCE;
+  const niche = classifyNiche(`${empresa || ""} ${mensagem || ""}`);
   const resumo = [
     `Nome: ${nome || "-"}`,
     `Empresa: ${empresa || "-"}`,
     `E-mail: ${email || "-"}`,
     `Telefone: ${telefone || "-"}`,
     `Funcionários: ${funcionarios || "-"}`,
+    `Nicho provável: ${niche ? niche.label : "-"}`,
     `Precisa resolver: ${mensagem || "-"}`,
   ].join("\n");
 
@@ -136,6 +140,18 @@ export async function handleSiteForm({ nome, empresa, email, telefone, funcionar
     return;
   }
   const numero = digits.startsWith("55") ? digits : `55${digits}`;
+
+  // Persiste o lead do site no company_leads (dedup por telefone, best-effort)
+  if (prospectingEnabled()) {
+    upsertInboundLead({
+      phone: numero,
+      name: nome || null,
+      company: empresa || null,
+      segment: niche?.segment ?? null,
+      source: "inbound-site",
+      lacunas: niche ? null : ["nicho não identificado"],
+    }).catch((err) => logger.error({ err }, "Falha ao salvar lead do formulário no banco"));
+  }
   const jid = `${numero}@s.whatsapp.net`;
   const firstName = (nome || "").trim().split(/\s+/)[0];
 

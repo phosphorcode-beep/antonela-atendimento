@@ -277,7 +277,7 @@ create table company_leads (
   decision_maker_confidence numeric,
   fit_score int,
   suggested_message text,
-  source text,                               -- overpass | brasilio | cnpja | cnpjws | minhareceita | opencnpj | manual-site | manual-cnpj
+  source text,                               -- overpass | brasilio | cnpja | cnpjws | minhareceita | opencnpj | manual-site | manual-cnpj | inbound-whatsapp | inbound-site
   segment text,                              -- industria | distribuidora | servicos_campo | clinicas | franquias | agro (null em /empresa manual)
   fontes jsonb,                              -- ex: ["overpass","cnpja","qsa","brave-linkedin"]
   lacunas jsonb,                             -- ex: ["telefone não encontrado"]

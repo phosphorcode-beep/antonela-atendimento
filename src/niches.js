@@ -101,6 +101,14 @@ export function supportedNicheLabels() {
   return NICHE_PROFILES.map((niche) => niche.shortLabel).join(", ");
 }
 
+// ── Classifica um texto livre (conversa, formulário) em um nicho, ou null ──────
+// Diferente de resolveNiche, devolve direto o perfil (ou null) pra usar como
+// palpite de segmento em leads inbound, sem os estados missing/unsupported.
+export function classifyNiche(text) {
+  const result = resolveNiche(text);
+  return result.status === "supported" ? result : null;
+}
+
 export function cnaeFromEnv(profile) {
   for (const envName of profile.cnaeEnv || []) {
     const value = process.env[envName];
