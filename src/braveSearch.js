@@ -39,7 +39,7 @@ async function searchWeb(query, count = 5) {
 }
 
 // ── Hosts que não são o site oficial da empresa (redes, diretórios, listas) ──
-const NON_OFFICIAL_HOST = /(instagram|facebook|fb\.com|linkedin|twitter|x\.com|youtube|tiktok|wa\.me|whatsapp|google\.|maps\.|goo\.gl|waze|ifood|olx|mercadolivre|mercadolibre|amazon|reclameaqui|guiamais|apontador|telelistas|econodata|cnpj|jusbrasil|wikipedia|glassdoor|indeed|catho|vagas|booking|tripadvisor|yelp)\./i;
+const NON_OFFICIAL_HOST = /(instagram|facebook|fb\.com|linkedin|twitter|x\.com|youtube|tiktok|wa\.me|whatsapp|google\.|maps\.|goo\.gl|waze|ifood|olx|mercadolivre|mercadolibre|amazon|reclameaqui|guiafacil|guiamais|guia\w*|apontador|telelistas|listafacil|econodata|cnpj|jusbrasil|wikipedia|glassdoor|indeed|catho|vagas|booking|tripadvisor|yelp|doctoralia|boaconsulta|agendarconsulta|encontreseu|solutudo)\./i;
 
 // ── Acha o provável site oficial da empresa (pra depois raspar CNPJ/contatos).
 // Filtra redes sociais, diretórios e listas — devolve a raiz do primeiro
