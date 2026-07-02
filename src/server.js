@@ -142,14 +142,14 @@ app.post("/admin/prospect/discover", requireAdminKey, async (req, res) => {
     return res.status(503).json({ error: "Supabase não configurado" });
   }
 
-  const { city, uf, segment, maxResults } = req.body ?? {};
+  const { city, uf, segment, cnae, maxResults } = req.body ?? {};
   if (!city || !uf || !segment) {
     return res.status(400).json({ error: "city, uf e segment são obrigatórios" });
   }
 
   res.status(202).json({ ok: true, started: true });
 
-  runDiscovery({ city, uf, segment, maxResults }).catch((err) => {
+  runDiscovery({ city, uf, segment, cnae, maxResults }).catch((err) => {
     logger.error({ err }, "❌ Erro na descoberta de leads");
   });
 });

@@ -1,6 +1,9 @@
 import { logger } from "./logger.js";
 import { enrichByCnpj } from "./cnpjProviders.js";
 import { geocodeCity, searchBusinesses } from "./discovery.js";
+import { brasilioEnabled, searchByCnae } from "./brasilioProvider.js";
+import { braveSearchEnabled, findSocialLinks, findDecisionMakerMention } from "./braveSearch.js";
+import { computeConfidence, computeTier } from "./confidence.js";
 import { upsertCompanyLead } from "./supabase.js";
 import { notifyLeadsGroup } from "./notify.js";
 
@@ -154,10 +157,34 @@ export function buildOutreachMessage(lead, segment) {
   return `${saudacao} Vi que a ${empresa} atua em ${segmentLabel(segment)} em ${cidade}. Pela estrutura pública da empresa e pelo perfil operacional do segmento, parece haver oportunidade de melhorar ${dor}, especialmente em atendimento, agenda, controle interno ou relatórios. A Phosphorcode cria sistemas próprios e integrações pra operações desse tipo. Faz sentido eu mandar 3 ideias objetivas pra esse cenário?`;
 }
 
-// ── Monta o lead completo a partir de um negócio (Overpass, ou objeto sintético
-// vindo do comando /empresa) + enriquecimento. Se `business.cnpj` já vier
-// preenchido (ex: usuário digitou o CNPJ direto), pula a extração pelo site ──
+// ── Compara dois nomes de forma tolerante (case/acento/ordem de palavras) pra
+// cruzar o decisor achado via QSA com o que a busca web encontrou ───────────
+function normalizeName(name) {
+  return (name || "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "") // remove acentos (marcas diacríticas combinantes)
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, "")
+    .trim();
+}
+
+function namesLikelyMatch(a, b) {
+  const na = normalizeName(a);
+  const nb = normalizeName(b);
+  if (!na || !nb) return false;
+  const wordsA = new Set(na.split(/\s+/).filter((w) => w.length > 2));
+  const wordsB = nb.split(/\s+/).filter((w) => w.length > 2);
+  return wordsB.some((w) => wordsA.has(w));
+}
+
+// ── Monta o lead completo a partir de um negócio (Overpass/brasil.io, ou
+// objeto sintético vindo do comando /empresa) + enriquecimento. Se
+// `business.cnpj` já vier preenchido, pula a extração pelo site. Acumula
+// `fontes` (de onde cada dado veio) e `lacunas` (o que não foi encontrado) ──
 export async function buildLead(business, segment) {
+  const fontes = [business.source].filter(Boolean);
+  const lacunas = [];
+
   let cnpj = business.cnpj || null;
   let instagram = null;
 
@@ -170,48 +197,160 @@ export async function buildLead(business, segment) {
   let enriched = null;
   if (cnpj) {
     enriched = await enrichByCnpj(cnpj);
+    if (enriched) fontes.push(enriched.source);
+    else lacunas.push("CNPJ encontrado, mas nenhum provider retornou dados");
+  } else {
+    lacunas.push("CNPJ não encontrado");
   }
 
   const decisionMaker = inferDecisionMaker(enriched?.qsa);
+  if (decisionMaker.nome) fontes.push("qsa");
+
+  const nomeEmpresa = enriched?.nomeFantasia || enriched?.razaoSocial || business.nome || business.razaoSocial;
+  let linkedin = null;
+
+  // ── Busca web (opcional): Instagram/LinkedIn e cross-validação do decisor ──
+  if (braveSearchEnabled() && nomeEmpresa) {
+    const cidadeBusca = enriched?.cidade || business.cidade || null;
+    const social = await findSocialLinks({ nome: nomeEmpresa, cidade: cidadeBusca });
+
+    if (social.instagram && !instagram) {
+      instagram = social.instagram;
+      fontes.push("brave-instagram");
+    }
+    if (social.linkedin) {
+      linkedin = social.linkedin;
+      fontes.push("brave-linkedin");
+    }
+
+    const mention = await findDecisionMakerMention({ nome: nomeEmpresa });
+    if (mention?.nome) {
+      if (decisionMaker.nome && namesLikelyMatch(decisionMaker.nome, mention.nome)) {
+        // Mesmo nome confirmado em 2 fontes independentes (QSA + busca web)
+        fontes.push("brave-decisor");
+      } else if (!decisionMaker.nome) {
+        // Só a busca web achou um candidato, sem QSA pra confirmar
+        decisionMaker.nome = mention.nome;
+        decisionMaker.qualificacao = "mencionado publicamente";
+        decisionMaker.confidence = 0.4;
+        fontes.push("brave-decisor");
+      }
+    }
+  }
+
+  if (!decisionMaker.nome) lacunas.push("decisor não confirmado");
 
   const lead = {
     cnpj: cnpj || null,
-    razaoSocial: enriched?.razaoSocial || null,
-    nomeFantasia: enriched?.nomeFantasia || business.nome,
+    razaoSocial: enriched?.razaoSocial || business.razaoSocial || null,
+    nomeFantasia: enriched?.nomeFantasia || business.nome || null,
     telefone: enriched?.telefone || business.telefone || null,
+    whatsapp: enriched?.telefone || business.telefone || null,
     email: enriched?.email || null,
     website: business.website || null,
     instagram: instagram || null,
-    cnaePrincipal: enriched?.cnaePrincipal || null,
-    cnaeDescricao: enriched?.cnaeDescricao || null,
-    cidade: enriched?.cidade || null,
-    uf: enriched?.uf || null,
+    linkedin: linkedin || null,
+    cnaePrincipal: enriched?.cnaePrincipal || business.cnaePrincipal || null,
+    cnaeDescricao: enriched?.cnaeDescricao || business.cnaeDescricao || null,
+    cidade: enriched?.cidade || business.cidade || null,
+    uf: enriched?.uf || business.uf || null,
     endereco: enriched?.endereco || business.endereco || null,
     matriz: enriched?.matriz ?? null,
-    situacaoAtiva: enriched?.situacaoAtiva ?? null,
+    situacaoAtiva: enriched?.situacaoAtiva ?? business.situacaoAtiva ?? null,
     decisionMakerName: decisionMaker.nome,
     decisionMakerRole: decisionMaker.qualificacao,
     decisionMakerConfidence: decisionMaker.confidence,
-    source: enriched?.source || business.source || "unknown",
+    source: fontes[0] ?? "unknown",
+    fontes,
     enrichmentStatus: enriched ? "enriched" : cnpj ? "failed" : "partial",
   };
+
+  if (!lead.telefone) lacunas.push("telefone não encontrado");
+  if (!lead.email) lacunas.push("email não encontrado");
+  lead.lacunas = lacunas;
 
   lead.fitScore = calculateFitScore(lead, segment);
   lead.suggestedMessage = buildOutreachMessage(lead, segment);
   lead.summary = buildCompanySummary(lead, segment);
+  lead.confianca = computeConfidence(lead);
+  lead.tier = computeTier(lead, lead.confianca);
 
   return lead;
+}
+
+// ── Saída no schema estruturado pedido (JSON, pra log/consumo por outro sistema
+// depois — o card do WhatsApp continua sendo a versão humana) ───────────────
+export function toStructuredOutput(lead) {
+  return {
+    empresa: lead.nomeFantasia || lead.razaoSocial || null,
+    cnpj: lead.cnpj,
+    site: lead.website,
+    telefone: lead.telefone,
+    whatsapp: lead.whatsapp,
+    instagram: lead.instagram,
+    linkedin: lead.linkedin,
+    decisor_nome: lead.decisionMakerName,
+    decisor_cargo: lead.decisionMakerRole,
+    fontes: lead.fontes,
+    confianca: lead.confianca,
+    tier: lead.tier,
+    lacunas: lead.lacunas,
+  };
 }
 
 // ── Processa um negócio encontrado: enriquece, avalia, salva e notifica ──────
 export async function processCompany(business, segment) {
   const lead = await buildLead(business, segment);
+  logger.info(toStructuredOutput(lead), "📊 Lead processado");
 
   const saved = await upsertCompanyLead(lead);
-  if (!saved) return null;
+  if (saved) await notifyLeadsGroup(formatLeadCard(lead));
 
-  await notifyLeadsGroup(formatLeadCard(lead));
-  return saved;
+  return { lead, saved };
+}
+
+// ── Dedup entre fontes de descoberta (Overpass + brasil.io): por CNPJ quando
+// existe, senão por nome normalizado (case/acento/espaço não contam) ────────
+function dedupCandidates(businesses) {
+  const seen = new Set();
+  const result = [];
+
+  for (const b of businesses) {
+    const key = b.cnpj ? `cnpj:${b.cnpj}` : `nome:${normalizeName(b.nome)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(b);
+  }
+
+  return result;
+}
+
+function buildRoundSummary(leads) {
+  const byTier = { A: 0, B: 0, C: 0 };
+  const lacunaCounts = new Map();
+  let comDecisor = 0;
+
+  for (const lead of leads) {
+    byTier[lead.tier] = (byTier[lead.tier] ?? 0) + 1;
+    if (lead.decisionMakerName) comDecisor += 1;
+    for (const l of lead.lacunas ?? []) {
+      lacunaCounts.set(l, (lacunaCounts.get(l) ?? 0) + 1);
+    }
+  }
+
+  const topLacunas = [...lacunaCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([texto, n]) => `${texto} (${n}x)`);
+
+  const linhas = [
+    `📊 *Resumo da rodada*`,
+    `Tier A: ${byTier.A} · Tier B: ${byTier.B} · Tier C: ${byTier.C}`,
+    `Decisor confirmado: ${comDecisor}/${leads.length}`,
+    topLacunas.length ? `Maiores lacunas: ${topLacunas.join(", ")}` : null,
+  ].filter(Boolean);
+
+  return linhas.join("\n");
 }
 
 function domainFallback(website) {
@@ -268,6 +407,7 @@ export function formatLeadCard(lead) {
       lead.email ? `✉️ *E-mail:* ${lead.email}` : null,
       lead.website ? `🔗 *Site:* ${lead.website}` : null,
       lead.instagram ? `📸 *Instagram:* @${lead.instagram}` : null,
+      lead.linkedin ? `💼 *LinkedIn:* ${lead.linkedin}` : null,
     ].filter(Boolean),
   );
 
@@ -276,7 +416,7 @@ export function formatLeadCard(lead) {
       lead.decisionMakerName
         ? `👤 *Decisor provável:* ${lead.decisionMakerName} — ${lead.decisionMakerRole} (confiança ${Math.round(lead.decisionMakerConfidence * 100)}%)`
         : null,
-      `⭐ *Score:* ${lead.fitScore}/100 · _status: ${lead.enrichmentStatus}_`,
+      `⭐ *Score:* ${lead.fitScore}/100 · *Tier ${lead.tier}* · confiança ${lead.confianca}`,
     ].filter(Boolean),
   );
 
@@ -292,22 +432,34 @@ export function formatLeadCard(lead) {
     .join(`\n${divider}\n`);
 }
 
-// ── Ponto de entrada: geocodifica a cidade, descobre negócios e processa um a um ──
-export async function runDiscovery({ city, uf, segment, maxResults = 20 }) {
-  logger.info({ city, uf, segment, maxResults }, "🔎 Iniciando descoberta de leads");
+// ── Ponto de entrada: descoberta em cascata (Overpass + brasil.io), dedup,
+// processa cada candidato e fecha com um resumo da rodada no grupo ──────────
+export async function runDiscovery({ city, uf, segment, cnae, maxResults = 20 }) {
+  logger.info({ city, uf, segment, cnae, maxResults }, "🔎 Iniciando descoberta de leads");
 
   const { boundingbox } = await geocodeCity(city, uf);
-  const businesses = await searchBusinesses({ boundingbox, segment, maxResults });
+  const overpassResults = await searchBusinesses({ boundingbox, segment, maxResults });
+
+  let brasilioResults = [];
+  if (cnae && brasilioEnabled()) {
+    brasilioResults = await searchByCnae({ cnae, municipio: city, uf, maxResults });
+  }
+
+  const businesses = dedupCandidates([...overpassResults, ...brasilioResults]).slice(0, maxResults);
 
   let processed = 0;
+  const leads = [];
   for (const business of businesses) {
     try {
-      const saved = await processCompany(business, segment);
+      const { lead, saved } = await processCompany(business, segment);
+      leads.push(lead);
       if (saved) processed += 1;
     } catch (err) {
       logger.error({ err, business: business.nome }, "❌ Falha ao processar negócio");
     }
   }
+
+  if (leads.length) await notifyLeadsGroup(buildRoundSummary(leads));
 
   logger.info({ found: businesses.length, processed }, "✅ Descoberta de leads concluída");
   return { found: businesses.length, processed };

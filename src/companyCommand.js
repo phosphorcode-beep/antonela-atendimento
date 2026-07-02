@@ -1,6 +1,6 @@
 import { logger } from "./logger.js";
 import { searchByName } from "./discovery.js";
-import { buildLead, formatLeadCard, isValidCnpj } from "./companyIntel.js";
+import { buildLead, formatLeadCard, isValidCnpj, toStructuredOutput } from "./companyIntel.js";
 import { upsertCompanyLead } from "./supabase.js";
 import { notifyLeadsGroup } from "./notify.js";
 
@@ -41,6 +41,7 @@ export async function handleEmpresaCommand(text) {
       return;
     }
 
+    logger.info(toStructuredOutput(lead), "📊 Lead processado (/empresa)");
     upsertCompanyLead(lead).catch((err) => logger.error({ err }, "Falha ao salvar lead do comando /empresa"));
     await notifyLeadsGroup(formatLeadCard(lead));
   } catch (err) {
