@@ -555,8 +555,10 @@ export async function runDiscovery({ city, uf, segment, cnae, maxResults = 20, c
   const nationwide = Array.isArray(cities) && cities.length > 0;
   logger.info({ city, uf, segment, cnae, maxResults, nationwide }, "🔎 Iniciando descoberta de leads");
 
-  const targets = nationwide ? shuffle(cities) : [[city, uf]];
-  const perCity = nationwide ? Math.max(2, Math.ceil(maxResults / 5)) : maxResults;
+  // Em rodada nacional, embaralha e limita quantas cidades tentar (o Overpass
+  // público throttla se batermos em muitas em sequência).
+  const targets = nationwide ? shuffle(cities).slice(0, 8) : [[city, uf]];
+  const perCity = nationwide ? Math.max(2, Math.ceil(maxResults / 4)) : maxResults;
 
   let overpassResults = [];
   for (const [c, u] of targets) {
