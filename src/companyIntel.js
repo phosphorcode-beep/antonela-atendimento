@@ -124,10 +124,14 @@ function segmentLabel(segment) {
   return "sua área de atuação";
 }
 
-// ── Mensagem consultiva (template fixo, tom Antonela: sem travessão) ──────────
+// ── Mensagem consultiva (template fixo, tom Antonela: sem travessão). Retorna
+// null quando não há nem nome de empresa nem cidade conhecidos — nesse caso não
+// dá pra escrever uma abordagem que faça sentido, só dados soltos (site/insta) ──
 export function buildOutreachMessage(lead, segment) {
+  if (!lead.nomeFantasia && !lead.razaoSocial) return null;
+
   const nome = lead.decisionMakerName ? lead.decisionMakerName.split(/\s+/)[0] : null;
-  const empresa = lead.nomeFantasia || lead.razaoSocial || domainFallback(lead.website) || "sua empresa";
+  const empresa = lead.nomeFantasia || lead.razaoSocial;
   const cidade = lead.cidade || "sua cidade";
   const dor = DOR_HIPOTESE[segment] || "atendimento e operação";
 
@@ -196,9 +200,26 @@ export async function processCompany(business, segment) {
   return saved;
 }
 
-// ── Resumo factual da empresa (não é a abordagem de venda, é a "ficha" do lead) ──
+function domainFallback(website) {
+  if (!website) return null;
+  return website.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+}
+
+// ── Resumo factual da empresa (não é a abordagem de venda, é a "ficha" do lead).
+// Quando não há nome de empresa nem CNPJ, evita forçar frase tipo "a sabin.com.br
+// atua em..." — em vez disso, diz honestamente o que foi (e não foi) encontrado ──
 export function buildCompanySummary(lead, segment) {
-  const empresa = lead.nomeFantasia || lead.razaoSocial || domainFallback(lead.website) || "Empresa não identificada";
+  if (!lead.nomeFantasia && !lead.razaoSocial) {
+    const achados = [
+      lead.website ? `site ${lead.website}` : null,
+      lead.instagram ? `Instagram @${lead.instagram}` : null,
+    ].filter(Boolean);
+    return achados.length
+      ? `Não encontrei CNPJ nem razão social públicos para essa empresa. Só achei: ${achados.join(" e ")}.`
+      : `Não encontrei nenhum dado público confiável para essa consulta.`;
+  }
+
+  const empresa = lead.nomeFantasia || lead.razaoSocial;
   const atividade = lead.cnaeDescricao || segmentLabel(segment);
   const local = [lead.cidade, lead.uf].filter(Boolean).join("/") || "localização não identificada";
   const situacao = lead.situacaoAtiva === true ? "ativa" : lead.situacaoAtiva === false ? "inativa" : "situação não confirmada";
@@ -206,41 +227,55 @@ export function buildCompanySummary(lead, segment) {
   return `${empresa} atua em ${atividade}, com sede em ${local}. Situação cadastral: ${situacao}.`;
 }
 
-// ── Card visual pro grupo (usado tanto na descoberta automática quanto no /empresa) ──
-function domainFallback(website) {
-  if (!website) return null;
-  return website.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
-}
-
+// ── Card visual pro grupo (usado tanto na descoberta automática quanto no /empresa).
+// Cada seção só aparece se tiver pelo menos um dado real — nada de "não identificado"
+// poluindo o card quando a informação simplesmente não existe ──────────────────
 export function formatLeadCard(lead) {
   const divider = "───────────────────";
   const titulo = lead.nomeFantasia || lead.razaoSocial || domainFallback(lead.website) || "Empresa não identificada";
+  const local = [lead.cidade, lead.uf].filter(Boolean).join("/");
 
-  const lines = [
-    `🏢 *${titulo}*`,
-    divider,
-    `📝 ${lead.summary}`,
-    ``,
-    `📋 *CNPJ:* ${lead.cnpj || "não identificado (dado parcial)"}`,
-    lead.razaoSocial && lead.razaoSocial !== titulo ? `🏛️ *Razão social:* ${lead.razaoSocial}` : null,
-    `📍 *Local:* ${[lead.cidade, lead.uf].filter(Boolean).join("/") || "não identificado"}`,
-    lead.endereco ? `🗺️ *Endereço:* ${lead.endereco}` : null,
-    divider,
-    `📱 *Contato:* ${lead.telefone || "não encontrado"}`,
-    lead.email ? `✉️ *E-mail:* ${lead.email}` : null,
-    lead.website ? `🔗 *Site:* ${lead.website}` : null,
-    lead.instagram ? `📸 *Instagram:* @${lead.instagram}` : null,
-    divider,
-    lead.decisionMakerName
-      ? `👤 *Decisor provável:* ${lead.decisionMakerName} — ${lead.decisionMakerRole} (confiança ${Math.round(lead.decisionMakerConfidence * 100)}%)`
-      : `👤 *Decisor provável:* não identificado`,
-    `⭐ *Score:* ${lead.fitScore}/100 · _status: ${lead.enrichmentStatus}_`,
-    divider,
-    `💬 *Sugestão de abordagem:*`,
-    lead.suggestedMessage,
-  ].filter(Boolean);
+  const sections = [];
 
-  return lines.join("\n");
+  sections.push([`🏢 *${titulo}*`, `📝 ${lead.summary}`]);
+
+  sections.push(
+    [
+      lead.cnpj ? `📋 *CNPJ:* ${lead.cnpj}` : null,
+      lead.razaoSocial && lead.razaoSocial !== titulo ? `🏛️ *Razão social:* ${lead.razaoSocial}` : null,
+      local ? `📍 *Local:* ${local}` : null,
+      lead.endereco ? `🗺️ *Endereço:* ${lead.endereco}` : null,
+    ].filter(Boolean),
+  );
+
+  sections.push(
+    [
+      lead.telefone ? `📱 *Contato:* ${lead.telefone}` : null,
+      lead.email ? `✉️ *E-mail:* ${lead.email}` : null,
+      lead.website ? `🔗 *Site:* ${lead.website}` : null,
+      lead.instagram ? `📸 *Instagram:* @${lead.instagram}` : null,
+    ].filter(Boolean),
+  );
+
+  sections.push(
+    [
+      lead.decisionMakerName
+        ? `👤 *Decisor provável:* ${lead.decisionMakerName} — ${lead.decisionMakerRole} (confiança ${Math.round(lead.decisionMakerConfidence * 100)}%)`
+        : null,
+      `⭐ *Score:* ${lead.fitScore}/100 · _status: ${lead.enrichmentStatus}_`,
+    ].filter(Boolean),
+  );
+
+  sections.push([
+    lead.suggestedMessage
+      ? `💬 *Sugestão de abordagem:*\n${lead.suggestedMessage}`
+      : `ℹ️ Dados públicos insuficientes pra sugerir uma abordagem ainda.`,
+  ]);
+
+  return sections
+    .filter((s) => s.length > 0)
+    .map((s) => s.join("\n"))
+    .join(`\n${divider}\n`);
 }
 
 // ── Ponto de entrada: geocodifica a cidade, descobre negócios e processa um a um ──
