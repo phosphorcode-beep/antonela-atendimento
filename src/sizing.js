@@ -46,7 +46,12 @@ function maxCapital() {
 // porte/capital; sem dado nenhum, mantém (não dá pra afirmar que é grande) e
 // sinaliza a incerteza pra revisão humana.
 export function evaluateSize({ porte, capitalSocial } = {}) {
-  const capital = Number.isFinite(Number(capitalSocial)) ? Number(capitalSocial) : null;
+  // Atenção: Number(null) é 0 (não NaN), então trata null/"" como ausência ANTES
+  // de converter, senão capital vazio viraria 0 e "known" ficaria true à toa.
+  const capital =
+    capitalSocial == null || capitalSocial === "" || !Number.isFinite(Number(capitalSocial))
+      ? null
+      : Number(capitalSocial);
   const known = Boolean(porte) || capital != null;
 
   if (!known) return { known: false, isTarget: true, porte: null, reason: "porte não confirmado" };
