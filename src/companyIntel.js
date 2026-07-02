@@ -131,8 +131,8 @@ export function calculateFitScore(lead, segment) {
 }
 
 const DOR_HIPOTESE = {
-  saude: "agendamento e atendimento ao paciente",
-  varejo: "controle de estoque e vendas",
+  saude: "agenda, atendimento e follow-up de pacientes",
+  varejo: "estoque, vendas e atendimento",
 };
 
 function segmentLabel(segment) {
@@ -149,12 +149,12 @@ export function buildOutreachMessage(lead, segment) {
 
   const nome = lead.decisionMakerName ? lead.decisionMakerName.split(/\s+/)[0] : null;
   const empresa = lead.nomeFantasia || lead.razaoSocial;
-  const cidade = lead.cidade || "sua cidade";
+  const local = lead.cidade ? ` em ${lead.cidade}` : "";
   const dor = DOR_HIPOTESE[segment] || "atendimento e operação";
 
   const saudacao = nome ? `Olá, ${nome}.` : "Olá.";
 
-  return `${saudacao} Vi que a ${empresa} atua em ${segmentLabel(segment)} em ${cidade}. Pela estrutura pública da empresa e pelo perfil operacional do segmento, parece haver oportunidade de melhorar ${dor}, especialmente em atendimento, agenda, controle interno ou relatórios. A Phosphorcode cria sistemas próprios e integrações pra operações desse tipo. Faz sentido eu mandar 3 ideias objetivas pra esse cenário?`;
+  return `${saudacao} Encontrei ${empresa}${local} e pensei em uma forma simples de melhorar ${dor}. A Phosphorcode cria sistemas sob medida para tirar retrabalho da operação. Posso te mandar uma ideia rápida?`;
 }
 
 // ── Compara dois nomes de forma tolerante (case/acento/ordem de palavras) pra

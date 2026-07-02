@@ -236,6 +236,17 @@ Além da descoberta automática, dá pra consultar uma empresa específica digit
 
 O sistema detecta sozinho se você mandou CNPJ, site ou nome. Pra nome, a busca é restrita à cidade de `PROSPECT_TARGET_CITY`/`PROSPECT_TARGET_UF` (uma busca sem cidade, em todo o Brasil, foi testada e dá timeout no servidor público do Overpass). O bot responde no mesmo grupo com um card contendo CNPJ, razão social, contato, site, Instagram/LinkedIn (se achados), decisor provável, score, tier e confiança, e um resumo da empresa.
 
+### Comando `prospecte N empresas de <nicho>` no grupo "Phosphor Leads"
+
+Para iniciar uma rodada direto pelo grupo:
+
+```
+prospecte 10 empresas de saúde
+prospecte 15 empresas de varejo
+```
+
+Se mandar só `prospecte 10 empresas`, a Antonela responde pedindo o nicho. Por enquanto os nichos mapeados são `saúde` e `varejo`; aliases como `clínicas`, `consultórios`, `farmácias`, `lojas` e `mercado` caem nesses dois grupos. A cidade/UF vêm de `PROSPECT_TARGET_CITY` e `PROSPECT_TARGET_UF`. O limite de segurança do comando é 50 empresas por rodada.
+
 ### Schema Supabase
 
 Se você já tem a tabela `company_leads` de uma versão anterior, rode só o `alter table` abaixo (não perde dados existentes):
@@ -283,7 +294,7 @@ alter table company_leads
   add column if not exists lacunas jsonb;
 ```
 
-Variáveis necessárias: `LEADS_GROUP_JID` (grupo "Phosphor Leads" — também é o único grupo onde o comando `/empresa` é aceito), `PROSPECT_TARGET_CITY`/`PROSPECT_TARGET_UF` (bônus de score e cidade usada na busca por nome), `PROSPECT_CONTACT_EMAIL` (exigido pela política de uso do Nominatim). Reaproveita `SUPABASE_URL`/`SUPABASE_SERVICE_KEY` já configurados pra cadência. Opcionais: `BRASILIO_API_TOKEN` (descoberta por CNAE) e `BRAVE_API_KEY` (Instagram/LinkedIn/decisor via busca web) — sem elas o sistema funciona igual, só sem essas duas fontes extras.
+Variáveis necessárias: `LEADS_GROUP_JID` (grupo "Phosphor Leads" — também é o único grupo onde os comandos de prospecção são aceitos), `PROSPECT_TARGET_CITY`/`PROSPECT_TARGET_UF` (bônus de score, cidade usada na busca por nome e cidade da rodada pelo comando), `PROSPECT_CONTACT_EMAIL` (exigido pela política de uso do Nominatim). Reaproveita `SUPABASE_URL`/`SUPABASE_SERVICE_KEY` já configurados pra cadência. Opcionais: `BRASILIO_API_TOKEN` (descoberta por CNAE), `PROSPECT_SAUDE_CNAE`/`PROSPECT_VAREJO_CNAE` (CNAE usado quando o comando do grupo dispara descoberta com brasil.io) e `BRAVE_API_KEY` (Instagram/LinkedIn/decisor via busca web) — sem elas o sistema funciona igual, só sem essas duas fontes extras.
 
 Nenhuma mensagem é enviada automaticamente ao lead — o texto sugerido só vai pro grupo interno, para aprovação humana antes de qualquer contato.
 

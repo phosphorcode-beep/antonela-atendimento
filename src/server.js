@@ -9,7 +9,7 @@ import { runCadenceTick, checkProspectReply } from "./prospecting.js";
 import { prospectingEnabled, upsertLeads } from "./supabase.js";
 import { sheetsEnabled, readLeadsFromSheet } from "./sheets.js";
 import { runDiscovery } from "./companyIntel.js";
-import { isEmpresaCommand, handleEmpresaCommand } from "./companyCommand.js";
+import { isEmpresaCommand, handleEmpresaCommand, isProspectingCommand, handleProspectingCommand } from "./companyCommand.js";
 
 // ── Validação de variáveis obrigatórias ───────────────────────────────────────
 const REQUIRED_ENV = ["EVOLUTION_API_URL", "EVOLUTION_API_KEY", "EVOLUTION_INSTANCE"];
@@ -210,11 +210,13 @@ app.post("/webhook/evolution", async (req, res) => {
     const remoteJid = msg.key.remoteJid;
 
     if (remoteJid?.includes("@g.us")) {
-      // Único comando aceito em grupo: /empresa <nome|site|cnpj>, só no grupo Phosphor Leads
+      // Comandos aceitos em grupo, só no Phosphor Leads
       if (remoteJid === process.env.LEADS_GROUP_JID) {
         const groupText = msg.message?.conversation ?? msg.message?.extendedTextMessage?.text ?? null;
         if (groupText && isEmpresaCommand(groupText)) {
           await handleEmpresaCommand(groupText);
+        } else if (groupText && isProspectingCommand(groupText)) {
+          await handleProspectingCommand(groupText);
         }
       }
       return;
