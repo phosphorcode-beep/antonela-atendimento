@@ -77,6 +77,8 @@ function companyName(lead) {
 function contactPhone(lead) {
   const raw = lead.decision_maker_whatsapp || lead.decision_maker_phone || lead.whatsapp || lead.telefone;
   const digits = String(raw || "").split("@")[0].replace(/\D/g, "");
+  if (digits.startsWith("0800")) return null;
+  if (digits.length < 10) return null;
   return digits || null;
 }
 
@@ -134,7 +136,14 @@ function followUpMessage(step, lead) {
 
 function outreachMessage(lead) {
   const touchCount = lead.outreach_touch_count ?? 0;
-  if (touchCount === 0 && lead.suggested_message) return lead.suggested_message;
+  if (touchCount === 0) {
+    const nome = firstName(lead);
+    if (nome) {
+      return `Oi, ${nome}. Tudo bem? Aqui é a Antonela, da Phosphorcode. Dei uma olhada rápida no trabalho de vocês e uma coisa me deixou curiosa. Posso te perguntar?`;
+    }
+
+    return "Oi, tudo bem? Aqui é a Antonela, da Phosphorcode. Dei uma olhada rápida no trabalho de vocês e uma coisa me deixou curiosa. Você sabe quem seria a pessoa certa para eu perguntar?";
+  }
   return followUpMessage(touchCount, lead);
 }
 
@@ -216,13 +225,7 @@ export async function runCompanyOutreachTick({ force = false } = {}) {
       continue;
     }
 
-    if (!lead.suggested_message) {
-      await markCompanyOutreachBlocked(lead.id, "sem mensagem inicial sugerida");
-      blockedLeads.push({ lead, reason: "sem mensagem inicial" });
-      continue;
-    }
-
-    const text = withOptOut(outreachMessage(lead));
+      const text = withOptOut(outreachMessage(lead));
     const touchCount = (lead.outreach_touch_count ?? 0) + 1;
     const status = nextStatus(touchCount);
     const nextOutreachAt = status === "done" ? null : nextCompanyOutreachAt(new Date()).toISOString();
