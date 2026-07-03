@@ -3,7 +3,7 @@ import { enrichByCnpj } from "./cnpjProviders.js";
 import { geocodeCity, searchBusinesses } from "./discovery.js";
 import { brasilioEnabled, searchByCnae } from "./brasilioProvider.js";
 import { apifyEnabled, searchApifyBusinesses } from "./apifyProvider.js";
-import { braveSearchEnabled, findOfficialWebsite, findSocialLinks, findDecisionMakerMention } from "./braveSearch.js";
+import { braveSearchEnabled, findOfficialWebsite, findSocialLinks, findDecisionMakerMention, findDecisionMakerContacts } from "./braveSearch.js";
 import { computeConfidence, computeTier } from "./confidence.js";
 import { getNicheProfile } from "./niches.js";
 import { classifyPorte, evaluateSize } from "./sizing.js";
@@ -162,6 +162,9 @@ export function calculateFitScore(lead, segment) {
   if (lead.nomeFantasia) score += 10;
   if (lead.telefone) score += 10;
   if (lead.email) score += 10;
+  if (lead.decisionMakerPhone || lead.decisionMakerWhatsapp) score += 20;
+  if (lead.decisionMakerEmail) score += 15;
+  if (lead.decisionMakerLinkedin || lead.decisionMakerInstagram) score += 10;
   if (lead.decisionMakerConfidence >= 0.7) score += 15;
   if (lead.matriz) score += 10;
   if (lead.website) score += 10;
@@ -260,6 +263,12 @@ export async function buildLead(business, segment) {
 
   const nomeEmpresa = enriched?.nomeFantasia || enriched?.razaoSocial || business.nome || business.razaoSocial;
   let linkedin = business.linkedin || null;
+  let decisionMakerEmail = null;
+  let decisionMakerPhone = null;
+  let decisionMakerWhatsapp = null;
+  let decisionMakerLinkedin = null;
+  let decisionMakerInstagram = null;
+  let decisionMakerContactSources = [];
 
   // ── Busca web (opcional): Instagram/LinkedIn e cross-validação do decisor ──
   if (braveSearchEnabled() && nomeEmpresa) {
@@ -286,6 +295,19 @@ export async function buildLead(business, segment) {
         decisionMaker.qualificacao = "mencionado publicamente";
         decisionMaker.confidence = 0.4;
         fontes.push("brave-decisor");
+      }
+    }
+
+    if (decisionMaker.nome) {
+      const contacts = await findDecisionMakerContacts({ nome: decisionMaker.nome, empresa: nomeEmpresa });
+      decisionMakerEmail = contacts.email;
+      decisionMakerPhone = contacts.phone;
+      decisionMakerWhatsapp = contacts.whatsapp;
+      decisionMakerLinkedin = contacts.linkedin;
+      decisionMakerInstagram = contacts.instagram;
+      decisionMakerContactSources = contacts.sourceUrls ?? [];
+      if (decisionMakerEmail || decisionMakerPhone || decisionMakerLinkedin || decisionMakerInstagram) {
+        fontes.push("brave-decisor-contato");
       }
     }
   }
@@ -328,13 +350,22 @@ export async function buildLead(business, segment) {
     decisionMakerName: decisionMaker.nome,
     decisionMakerRole: decisionMaker.qualificacao,
     decisionMakerConfidence: decisionMaker.confidence,
+    decisionMakerEmail,
+    decisionMakerPhone,
+    decisionMakerWhatsapp,
+    decisionMakerLinkedin,
+    decisionMakerInstagram,
+    decisionMakerContactSources,
     source: fontes[0] ?? "unknown",
     fontes,
     enrichmentStatus: enriched ? "enriched" : cnpj ? "failed" : "partial",
   };
 
-  if (!lead.telefone) lacunas.push("telefone não encontrado");
-  if (!lead.email) lacunas.push("email não encontrado");
+  if (!lead.decisionMakerPhone && !lead.decisionMakerWhatsapp && !lead.decisionMakerEmail && !lead.decisionMakerLinkedin && !lead.decisionMakerInstagram) {
+    lacunas.push("contato pessoal do decisor nao encontrado");
+  }
+  if (!lead.telefone) lacunas.push("telefone empresarial nao encontrado");
+  if (!lead.email) lacunas.push("email empresarial nao encontrado");
   if (!size.known) lacunas.push("porte não confirmado");
   lead.lacunas = lacunas;
 
@@ -362,6 +393,12 @@ export function toStructuredOutput(lead) {
     linkedin: lead.linkedin,
     decisor_nome: lead.decisionMakerName,
     decisor_cargo: lead.decisionMakerRole,
+    decisor_email: lead.decisionMakerEmail,
+    decisor_telefone: lead.decisionMakerPhone,
+    decisor_whatsapp: lead.decisionMakerWhatsapp,
+    decisor_linkedin: lead.decisionMakerLinkedin,
+    decisor_instagram: lead.decisionMakerInstagram,
+    decisor_fontes_contato: lead.decisionMakerContactSources,
     porte: lead.porte,
     capital_social: lead.capitalSocial,
     fontes: lead.fontes,
@@ -476,6 +513,13 @@ export function formatLeadCard(lead) {
   const titulo = lead.nomeFantasia || lead.razaoSocial || domainFallback(lead.website) || "Empresa não identificada";
   const local = [lead.cidade, lead.uf].filter(Boolean).join("/");
   const profile = getNicheProfile(lead.segment);
+  const hasDecisionMakerContact = Boolean(
+    lead.decisionMakerPhone ||
+      lead.decisionMakerWhatsapp ||
+      lead.decisionMakerEmail ||
+      lead.decisionMakerLinkedin ||
+      lead.decisionMakerInstagram,
+  );
 
   const sections = [];
 
@@ -500,11 +544,15 @@ export function formatLeadCard(lead) {
 
   sections.push(
     [
-      lead.telefone ? `📱 *Contato:* ${lead.telefone}` : null,
-      lead.email ? `✉️ *E-mail:* ${lead.email}` : null,
-      lead.website ? `🔗 *Site:* ${lead.website}` : null,
-      lead.instagram ? `📸 *Instagram:* @${lead.instagram}` : null,
-      lead.linkedin ? `💼 *LinkedIn:* ${lead.linkedin}` : null,
+      lead.decisionMakerPhone || lead.decisionMakerWhatsapp ? `📱 *Contato do decisor:* ${lead.decisionMakerWhatsapp || lead.decisionMakerPhone}` : null,
+      lead.decisionMakerEmail ? `✉️ *E-mail do decisor:* ${lead.decisionMakerEmail}` : null,
+      lead.decisionMakerLinkedin ? `💼 *LinkedIn do decisor:* ${lead.decisionMakerLinkedin}` : null,
+      lead.decisionMakerInstagram ? `📸 *Instagram do decisor:* @${lead.decisionMakerInstagram}` : null,
+      lead.telefone && !hasDecisionMakerContact ? `📱 *Fallback empresarial:* ${lead.telefone}` : null,
+      lead.email && !hasDecisionMakerContact ? `✉️ *E-mail empresarial:* ${lead.email}` : null,
+      lead.website && !hasDecisionMakerContact ? `🔗 *Site:* ${lead.website}` : null,
+      lead.instagram && !hasDecisionMakerContact ? `📸 *Instagram empresarial:* @${lead.instagram}` : null,
+      lead.linkedin && !hasDecisionMakerContact ? `💼 *LinkedIn empresarial:* ${lead.linkedin}` : null,
     ].filter(Boolean),
   );
 

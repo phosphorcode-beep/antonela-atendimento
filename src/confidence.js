@@ -4,7 +4,7 @@
 // 1 fonte só; BAIXA é quando não há decisor identificado ────────────────────
 export function computeConfidence(lead) {
   const decisorFontes = (lead.fontes ?? []).filter((f) =>
-    ["qsa", "brave-linkedin", "brave-decisor"].includes(f),
+    ["qsa", "brave-linkedin", "brave-decisor", "brave-decisor-contato"].includes(f),
   );
 
   if (!lead.decisionMakerName) return "baixa";
@@ -15,9 +15,16 @@ export function computeConfidence(lead) {
 // ── Tier de ação: A = pode disparar abordagem já; B = acionável mas com
 // ressalva; C = dados fracos demais, precisa de revisão humana antes ────────
 export function computeTier(lead, confidence) {
-  const temContatoAcionavel = Boolean(lead.telefone || lead.whatsapp || lead.email);
+  const temContatoDecisor = Boolean(
+    lead.decisionMakerPhone ||
+      lead.decisionMakerWhatsapp ||
+      lead.decisionMakerEmail ||
+      lead.decisionMakerLinkedin ||
+      lead.decisionMakerInstagram,
+  );
+  const temContatoAcionavel = temContatoDecisor || Boolean(lead.telefone || lead.whatsapp || lead.email);
 
-  if (lead.fitScore >= 60 && temContatoAcionavel && confidence !== "baixa") return "A";
+  if (lead.fitScore >= 60 && temContatoDecisor && confidence !== "baixa") return "A";
   if (lead.fitScore >= 35 && temContatoAcionavel) return "B";
   return "C";
 }

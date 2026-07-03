@@ -80,10 +80,91 @@ export async function findSocialLinks({ nome, cidade }) {
   return { instagram, linkedin };
 }
 
+// Busca contatos publicos ligados ao nome do decisor. Prioridade:
+// perfil pessoal/profissional primeiro; contato empresarial fica como fallback
+// em companyIntel.js quando nada pessoal aparecer aqui.
+export async function findDecisionMakerContacts({ nome, empresa }) {
+  if (!nome || !braveSearchEnabled()) {
+    return { email: null, phone: null, whatsapp: null, linkedin: null, instagram: null, sourceUrls: [] };
+  }
+
+  const companyHint = empresa ? ` "${empresa}"` : "";
+  const queries = [
+    `site:linkedin.com/in "${nome}"${companyHint}`,
+    `site:instagram.com "${nome}"${companyHint}`,
+    `"${nome}"${companyHint} (email OR e-mail OR contato OR whatsapp OR telefone)`,
+  ];
+
+  const [liResults, igResults, contactResults] = await Promise.all(queries.map((q) => searchWeb(q, 5)));
+  const linkedin = firstPersonalLinkedin(liResults);
+  const instagram = firstInstagramHandleForName(igResults, nome);
+
+  let email = null;
+  let phone = null;
+  let whatsapp = null;
+  for (const r of contactResults) {
+    const text = `${r.title ?? ""} ${r.description ?? ""} ${r.url ?? ""}`;
+    email ||= extractEmail(text);
+    const foundPhone = extractPhone(text);
+    phone ||= foundPhone;
+    whatsapp ||= looksLikeWhatsapp(text) ? foundPhone : null;
+    if (email && phone) break;
+  }
+
+  const sourceUrls = [...liResults, ...igResults, ...contactResults]
+    .map((r) => r.url)
+    .filter(Boolean)
+    .slice(0, 5);
+
+  return { email, phone, whatsapp, linkedin, instagram, sourceUrls };
+}
+
 function extractInstagramHandle(url) {
   if (!url) return null;
   const match = url.match(/instagram\.com\/([a-zA-Z0-9_.]{2,30})/i);
   return match ? match[1].replace(/\/$/, "") : null;
+}
+
+function firstPersonalLinkedin(results) {
+  return results.find((r) => /linkedin\.com\/in\//i.test(r.url ?? ""))?.url ?? null;
+}
+
+function firstInstagramHandleForName(results, nome) {
+  const expected = normalizeLoose(nome);
+  for (const r of results) {
+    const handle = extractInstagramHandle(r.url);
+    if (!handle) continue;
+    const haystack = normalizeLoose(`${r.title ?? ""} ${r.description ?? ""} ${handle}`);
+    if (expected.split(" ").some((part) => part.length > 2 && haystack.includes(part))) return handle;
+  }
+  return null;
+}
+
+function normalizeLoose(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s_.-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractEmail(text) {
+  const match = String(text).match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
+  return match ? match[0].toLowerCase() : null;
+}
+
+function extractPhone(text) {
+  for (const match of String(text).matchAll(/(?:\+?55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}[-.\s]?\d{4}/g)) {
+    const digits = match[0].replace(/\D/g, "");
+    if (digits.length >= 10 && digits.length <= 13) return digits;
+  }
+  return null;
+}
+
+function looksLikeWhatsapp(text) {
+  return /(whats|wa\.me|api\.whatsapp)/i.test(String(text));
 }
 
 // ── Heurística de decisor: busca "<empresa> (dono OR sócio OR fundador OR
