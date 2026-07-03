@@ -7,6 +7,18 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
 const TABLE = "prospecting_leads";
 const COMPANY_TABLE = "company_leads";
+const COMPANY_OUTREACH_ACTIVE_STATUSES = [
+  "pending",
+  "contacted_1",
+  "contacted_2",
+  "contacted_3",
+  "contacted_4",
+  "contacted_5",
+  "contacted_6",
+  "contacted_7",
+  "contacted_8",
+  "contacted_9",
+];
 
 let client = null;
 
@@ -114,6 +126,145 @@ export async function markOptedOut(phone) {
     .eq("phone", phone);
 }
 
+// ── Cadência para leads de empresa já descobertos/notificados no grupo ───────
+export async function getDueCompanyOutreachLeads(limit, nowIso = new Date().toISOString()) {
+  const db = getClient();
+  const { data, error } = await db
+    .from(COMPANY_TABLE)
+    .select("*")
+    .eq("notified", true)
+    .in("outreach_status", COMPANY_OUTREACH_ACTIVE_STATUSES)
+    .lte("next_outreach_at", nowIso)
+    .order("next_outreach_at", { ascending: true })
+    .limit(limit);
+
+  if (error) {
+    logger.error({ err: error }, "❌ Erro ao buscar company_leads para disparo");
+    return [];
+  }
+
+  return data ?? [];
+}
+
+export async function markCompanyOutreachManual(id, reason) {
+  const db = getClient();
+  const { error } = await db
+    .from(COMPANY_TABLE)
+    .update({
+      outreach_status: "manual_social",
+      outreach_error: String(reason || "").slice(0, 500),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+
+  if (error) logger.error({ err: error, id }, "❌ Erro ao marcar company_lead para prospecção manual");
+}
+
+export async function markCompanyOutreachSent(id, { status, nextOutreachAt, touchCount }) {
+  const db = getClient();
+  const { error } = await db
+    .from(COMPANY_TABLE)
+    .update({
+      outreach_status: status,
+      outreach_touch_count: touchCount,
+      last_outreach_at: new Date().toISOString(),
+      next_outreach_at: nextOutreachAt,
+      outreach_error: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+
+  if (error) logger.error({ err: error, id }, "❌ Erro ao atualizar company_lead após disparo");
+}
+
+export async function markCompanyOutreachError(id, errorMessage) {
+  const db = getClient();
+  const { error } = await db
+    .from(COMPANY_TABLE)
+    .update({
+      outreach_error: String(errorMessage || "").slice(0, 500),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+
+  if (error) logger.error({ err: error, id }, "❌ Erro ao registrar falha no disparo de company_lead");
+}
+
+export async function markCompanyOutreachBlocked(id, reason) {
+  const db = getClient();
+  const { error } = await db
+    .from(COMPANY_TABLE)
+    .update({
+      outreach_status: "blocked",
+      outreach_error: String(reason || "").slice(0, 500),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+
+  if (error) logger.error({ err: error, id }, "❌ Erro ao bloquear company_lead na cadência");
+}
+
+export async function updateCompanyLeadSize(id, { porte, capitalSocial }) {
+  const db = getClient();
+  const { error } = await db
+    .from(COMPANY_TABLE)
+    .update({
+      porte,
+      capital_social: capitalSocial,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+
+  if (error) logger.error({ err: error, id }, "❌ Erro ao atualizar porte/capital do company_lead");
+}
+
+export async function findActiveCompanyLeadByPhone(phone) {
+  const db = getClient();
+  const digits = String(phone || "").split("@")[0].replace(/\D/g, "");
+  if (!digits) return null;
+
+  const { data, error } = await db
+    .from(COMPANY_TABLE)
+    .select("*")
+    .in("outreach_status", COMPANY_OUTREACH_ACTIVE_STATUSES)
+    .or(`decision_maker_whatsapp.eq.${digits},decision_maker_phone.eq.${digits},whatsapp.eq.${digits},telefone.eq.${digits}`)
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    logger.error({ err: error, phone }, "❌ Erro ao buscar company_lead ativo por telefone");
+    return null;
+  }
+
+  return data;
+}
+
+export async function markCompanyLeadReplied(phone) {
+  const db = getClient();
+  const digits = String(phone || "").split("@")[0].replace(/\D/g, "");
+  if (!digits) return;
+
+  const { error } = await db
+    .from(COMPANY_TABLE)
+    .update({ outreach_status: "replied", updated_at: new Date().toISOString() })
+    .or(`decision_maker_whatsapp.eq.${digits},decision_maker_phone.eq.${digits},whatsapp.eq.${digits},telefone.eq.${digits}`);
+
+  if (error) logger.error({ err: error, phone }, "❌ Erro ao marcar company_lead como respondido");
+}
+
+export async function markCompanyLeadOptedOut(phone) {
+  const db = getClient();
+  const digits = String(phone || "").split("@")[0].replace(/\D/g, "");
+  if (!digits) return;
+
+  const { error } = await db
+    .from(COMPANY_TABLE)
+    .update({ outreach_status: "opted_out", updated_at: new Date().toISOString() })
+    .or(`decision_maker_whatsapp.eq.${digits},decision_maker_phone.eq.${digits},whatsapp.eq.${digits},telefone.eq.${digits}`);
+
+  if (error) logger.error({ err: error, phone }, "❌ Erro ao marcar company_lead como opt-out");
+}
+
 // ── Empresas descobertas pela prospecção ativa (Free Prospecting Intelligence) ──
 
 // ── Salva/atualiza um lead de empresa; evita duplicar quem já foi notificado ──
@@ -148,6 +299,8 @@ export async function upsertCompanyLead(lead) {
     decision_maker_instagram: lead.decisionMakerInstagram,
     decision_maker_contact_sources: lead.decisionMakerContactSources ?? null,
     decision_maker_contact_layers: lead.decisionMakerContactLayers ?? null,
+    porte: lead.porte,
+    capital_social: lead.capitalSocial,
     fit_score: lead.fitScore,
     suggested_message: lead.suggestedMessage,
     source: lead.source,

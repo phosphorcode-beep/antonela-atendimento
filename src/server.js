@@ -6,6 +6,7 @@ import { resumeBot } from "./evolution.js";
 import { resolveIncomingMedia } from "./media.js";
 import { logger } from "./logger.js";
 import { runCadenceTick, checkProspectReply } from "./prospecting.js";
+import { runCompanyOutreachTick, checkCompanyOutreachReply } from "./companyOutreach.js";
 import { prospectingEnabled, upsertLeads } from "./supabase.js";
 import { sheetsEnabled, readLeadsFromSheet } from "./sheets.js";
 import { runDiscovery } from "./companyIntel.js";
@@ -154,6 +155,21 @@ app.post("/admin/prospect/discover", requireAdminKey, async (req, res) => {
   });
 });
 
+// ── Prospecção: dispara/faz follow-up nos company_leads já notificados no grupo
+app.post("/admin/company-outreach/tick", requireAdminKey, async (req, res) => {
+  if (!prospectingEnabled()) {
+    return res.status(503).json({ error: "Supabase não configurado" });
+  }
+
+  try {
+    const result = await runCompanyOutreachTick({ force: req.body?.force === true });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error({ err }, "❌ Erro no tick manual de company outreach");
+    res.status(500).json({ error: "Falha ao processar company outreach" });
+  }
+});
+
 // ── Formulário do site (envio automático) ────────────────────────────────────
 const FORM_SECRET = process.env.FORM_SECRET;
 
@@ -249,6 +265,9 @@ app.post("/webhook/evolution", async (req, res) => {
     const { handled } = await checkProspectReply({ phone, text, instance: payload.instance });
     if (handled) return;
 
+    const companyOutreach = await checkCompanyOutreachReply({ phone, text, instance: payload.instance });
+    if (companyOutreach.handled) return;
+
     if (isRateLimited(phone)) {
       logger.warn({ phone }, "Rate limit atingido, mensagem ignorada");
       return;
@@ -267,10 +286,16 @@ app.post("/webhook/evolution", async (req, res) => {
 // ── Prospecção: tick periódico de cadência (D0/D+3/D+7) ──────────────────────
 if (prospectingEnabled()) {
   const PROSPECT_TICK_MS = Number(process.env.PROSPECT_TICK_MS ?? 900_000);
+  const COMPANY_OUTREACH_TICK_MS = Number(process.env.COMPANY_OUTREACH_TICK_MS ?? 900_000);
   setInterval(() => {
     runCadenceTick().catch((err) => logger.error({ err }, "❌ Erro no tick de prospecção"));
   }, PROSPECT_TICK_MS).unref();
   logger.info({ PROSPECT_TICK_MS }, "🎯 Cadência de prospecção ativa");
+
+  setInterval(() => {
+    runCompanyOutreachTick().catch((err) => logger.error({ err }, "❌ Erro no tick de company outreach"));
+  }, COMPANY_OUTREACH_TICK_MS).unref();
+  logger.info({ COMPANY_OUTREACH_TICK_MS }, "🎯 Cadência de company_leads ativa");
 } else {
   logger.info("Prospecção desativada (SUPABASE_URL/SUPABASE_SERVICE_KEY não configurados)");
 }

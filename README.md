@@ -254,6 +254,21 @@ prospecte 8 empresas de agro
 
 Se mandar só `prospecte 10 empresas`, a Antonela responde pedindo o nicho. Os nichos mapeados são `indústrias`, `distribuidoras`, `serviços em campo`, `clínicas`, `franquias` e `agro`. A cidade/UF vêm de `PROSPECT_TARGET_CITY` e `PROSPECT_TARGET_UF`. O limite de segurança do comando é 50 empresas por rodada.
 
+### Disparo para leads já enviados ao grupo
+
+Os leads salvos em `company_leads` e já notificados no grupo (`notified = true`) entram numa cadência própria. A Antonela usa a `suggested_message` como primeiro toque, adiciona opt-out ("responder PARAR") e só envia para leads com contato acionável e porte confirmado como MEI/ME/EPP. Se o lead antigo ainda não tiver porte salvo, a cadência tenta reenriquecer pelo CNPJ antes de enviar; se não confirmar porte/capital, bloqueia o disparo daquele lead. Ao fim de cada tick, ela avisa no grupo quais receberam WhatsApp, quais precisam ser prospectados manualmente por Instagram/LinkedIn e quais não foram disparados.
+
+Janela padrão: segunda a sexta, 07:00-18:00 BRT, com follow-up a cada 6h dentro dessa janela. O endpoint manual é:
+
+```http
+POST /admin/company-outreach/tick
+x-admin-key: <ADMIN_KEY>
+
+{ "force": false }
+```
+
+Use `force: true` só para teste, porque ignora a janela comercial.
+
 ### Schema Supabase
 
 Se você já tem a tabela `company_leads` de uma versão anterior, rode só o `alter table` abaixo (não perde dados existentes):
@@ -285,6 +300,8 @@ create table company_leads (
   decision_maker_instagram text,
   decision_maker_contact_sources jsonb,
   decision_maker_contact_layers jsonb,
+  porte text,
+  capital_social numeric,
   fit_score int,
   suggested_message text,
   source text,                               -- overpass | brasilio | brave-site | cnpja | brasilapi | cnpjws | minhareceita | opencnpj | manual-site | manual-cnpj | inbound-whatsapp | inbound-site
@@ -294,6 +311,11 @@ create table company_leads (
   confianca text,                            -- alta | media | baixa
   tier text,                                 -- A | B | C
   enrichment_status text default 'pending',  -- pending | enriched | failed | partial
+  outreach_status text default 'pending',     -- pending | contacted_1 | contacted_2 | done | replied | opted_out | blocked | manual_social
+  outreach_touch_count int default 0,
+  next_outreach_at timestamptz default now(),
+  last_outreach_at timestamptz,
+  outreach_error text,
   notified boolean default false,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
@@ -314,14 +336,21 @@ alter table company_leads
   add column if not exists decision_maker_linkedin text,
   add column if not exists decision_maker_instagram text,
   add column if not exists decision_maker_contact_sources jsonb,
-  add column if not exists decision_maker_contact_layers jsonb;
+  add column if not exists decision_maker_contact_layers jsonb,
+  add column if not exists porte text,
+  add column if not exists capital_social numeric,
+  add column if not exists outreach_status text default 'pending',
+  add column if not exists outreach_touch_count int default 0,
+  add column if not exists next_outreach_at timestamptz default now(),
+  add column if not exists last_outreach_at timestamptz,
+  add column if not exists outreach_error text;
 ```
 
 Variáveis necessárias: `LEADS_GROUP_JID` (grupo "Phosphor Leads" — também é o único grupo onde os comandos de prospecção são aceitos), `PROSPECT_TARGET_CITY`/`PROSPECT_TARGET_UF` (bônus de score, cidade usada na busca por nome e cidade da rodada pelo comando), `PROSPECT_CONTACT_EMAIL` (exigido pela política de uso do Nominatim). Reaproveita `SUPABASE_URL`/`SUPABASE_SERVICE_KEY` já configurados pra cadência. Opcionais: `BRASILIO_API_TOKEN` (descoberta por CNAE), os CNAEs por nicho (`PROSPECT_INDUSTRIA_CNAE`, `PROSPECT_DISTRIBUIDORA_CNAE`, `PROSPECT_SERVICOS_CAMPO_CNAE`, `PROSPECT_CLINICAS_CNAE`, `PROSPECT_FRANQUIAS_CNAE`, `PROSPECT_AGRO_CNAE`) e `BRAVE_API_KEY` (Instagram/LinkedIn/decisor via busca web) — sem elas o sistema funciona igual, só sem essas duas fontes extras. Para controlar profundidade/custo da busca de contato pessoal do decisor, use `PROSPECT_DECISION_CONTACT_PROFILE_QUERIES` (default 2), `PROSPECT_DECISION_CONTACT_SNIPPET_QUERIES` (default 2), `PROSPECT_DECISION_CONTACT_OFFICIAL_PAGES` (default 4) e `PROSPECT_DECISION_MENTION_QUERIES` (default 2).
 
 Para usar Apify na descoberta, configure `APIFY_API_TOKEN`. O actor padrão é `compass/crawler-google-places`, customizável por `APIFY_GOOGLE_MAPS_ACTOR`; termos customizados vão em `APIFY_SEARCH_TERMS=clinica,dentista`. `APIFY_SCRAPE_CONTACTS=true` habilita o add-on pago de contatos do site quando sua conta/actor permitir.
 
-Nenhuma mensagem é enviada automaticamente ao lead — o texto sugerido só vai pro grupo interno, para aprovação humana antes de qualquer contato.
+O disparo automático para `company_leads` é controlado por `COMPANY_OUTREACH_TICK_MS`, `COMPANY_OUTREACH_BATCH_SIZE`, `COMPANY_OUTREACH_START_HOUR`, `COMPANY_OUTREACH_END_HOUR`, `COMPANY_OUTREACH_INTERVAL_HOURS`, `COMPANY_OUTREACH_MAX_TOUCHES` e `COMPANY_OUTREACH_SUMMARY_LIMIT`.
 
 ---
 
