@@ -269,6 +269,7 @@ export async function buildLead(business, segment) {
   let decisionMakerLinkedin = null;
   let decisionMakerInstagram = null;
   let decisionMakerContactSources = [];
+  let decisionMakerContactLayers = [];
 
   // ── Busca web (opcional): Instagram/LinkedIn e cross-validação do decisor ──
   if (braveSearchEnabled() && nomeEmpresa) {
@@ -299,13 +300,20 @@ export async function buildLead(business, segment) {
     }
 
     if (decisionMaker.nome) {
-      const contacts = await findDecisionMakerContacts({ nome: decisionMaker.nome, empresa: nomeEmpresa });
+      const contacts = await findDecisionMakerContacts({
+        nome: decisionMaker.nome,
+        empresa: nomeEmpresa,
+        website,
+        cidade: cidadeBusca,
+        role: decisionMaker.qualificacao,
+      });
       decisionMakerEmail = contacts.email;
       decisionMakerPhone = contacts.phone;
       decisionMakerWhatsapp = contacts.whatsapp;
       decisionMakerLinkedin = contacts.linkedin;
       decisionMakerInstagram = contacts.instagram;
       decisionMakerContactSources = contacts.sourceUrls ?? [];
+      decisionMakerContactLayers = contacts.layers ?? [];
       if (decisionMakerEmail || decisionMakerPhone || decisionMakerLinkedin || decisionMakerInstagram) {
         fontes.push("brave-decisor-contato");
       }
@@ -356,6 +364,7 @@ export async function buildLead(business, segment) {
     decisionMakerLinkedin,
     decisionMakerInstagram,
     decisionMakerContactSources,
+    decisionMakerContactLayers,
     source: fontes[0] ?? "unknown",
     fontes,
     enrichmentStatus: enriched ? "enriched" : cnpj ? "failed" : "partial",
@@ -399,6 +408,7 @@ export function toStructuredOutput(lead) {
     decisor_linkedin: lead.decisionMakerLinkedin,
     decisor_instagram: lead.decisionMakerInstagram,
     decisor_fontes_contato: lead.decisionMakerContactSources,
+    decisor_camadas_contato: lead.decisionMakerContactLayers,
     porte: lead.porte,
     capital_social: lead.capitalSocial,
     fontes: lead.fontes,
