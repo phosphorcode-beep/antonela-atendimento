@@ -9,7 +9,7 @@ import { runCadenceTick, checkProspectReply } from "./prospecting.js";
 import { prospectingEnabled, upsertLeads } from "./supabase.js";
 import { sheetsEnabled, readLeadsFromSheet } from "./sheets.js";
 import { runDiscovery } from "./companyIntel.js";
-import { isEmpresaCommand, handleEmpresaCommand } from "./companyCommand.js";
+import { isEmpresaCommand, handleEmpresaCommand, isProspectingCommand, handleProspectingCommand } from "./companyCommand.js";
 
 // ── Validação de variáveis obrigatórias ───────────────────────────────────────
 const REQUIRED_ENV = ["EVOLUTION_API_URL", "EVOLUTION_API_KEY", "EVOLUTION_INSTANCE"];
@@ -196,7 +196,14 @@ app.post("/webhook/evolution", async (req, res) => {
     const msg = payload.data;
     if (!msg) return;
 
-    if (msg.key?.fromMe) return;
+    const remoteJid = msg.key.remoteJid;
+    const isLeadsGroup = remoteJid === process.env.LEADS_GROUP_JID;
+
+    // Ignora as próprias mensagens do bot, EXCETO no grupo de leads: lá o dono
+    // (que costuma operar do mesmo número que roda o bot) precisa poder mandar
+    // comandos. Os comandos têm regex própria, então as notificações que o bot
+    // manda pro grupo (cards, resumos) não casam e não geram loop.
+    if (msg.key?.fromMe && !isLeadsGroup) return;
 
     const msgId = msg.key?.id;
     if (msgId) {
@@ -207,14 +214,14 @@ app.post("/webhook/evolution", async (req, res) => {
       markProcessed(msgId);
     }
 
-    const remoteJid = msg.key.remoteJid;
-
     if (remoteJid?.includes("@g.us")) {
-      // Único comando aceito em grupo: /empresa <nome|site|cnpj>, só no grupo Phosphor Leads
-      if (remoteJid === process.env.LEADS_GROUP_JID) {
+      // Comandos aceitos em grupo, só no Phosphor Leads
+      if (isLeadsGroup) {
         const groupText = msg.message?.conversation ?? msg.message?.extendedTextMessage?.text ?? null;
         if (groupText && isEmpresaCommand(groupText)) {
           await handleEmpresaCommand(groupText);
+        } else if (groupText && isProspectingCommand(groupText)) {
+          await handleProspectingCommand(groupText);
         }
       }
       return;

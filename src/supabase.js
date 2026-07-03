@@ -144,6 +144,7 @@ export async function upsertCompanyLead(lead) {
     fit_score: lead.fitScore,
     suggested_message: lead.suggestedMessage,
     source: lead.source,
+    segment: lead.segment ?? null,
     fontes: lead.fontes ?? null,
     lacunas: lead.lacunas ?? null,
     confianca: lead.confianca ?? null,
@@ -168,6 +169,64 @@ export async function upsertCompanyLead(lead) {
     return null;
   }
   return data;
+}
+
+// ── Salva/atualiza um lead inbound (chegou sozinho no WhatsApp ou pelo site e
+// se qualificou na conversa). Deduplica pelo telefone; se já existir (inclusive
+// vindo da prospecção ativa), completa só os campos vazios, sem sobrescrever
+// dados já enriquecidos. Unifica inbound e prospecção na mesma company_leads. ──
+export async function upsertInboundLead(lead) {
+  const db = getClient();
+  const phone = String(lead.phone || "").split("@")[0].replace(/\D/g, "");
+  if (!phone) return null;
+
+  const existing = await findCompanyLeadByPhone(phone);
+
+  const full = {
+    telefone: phone,
+    whatsapp: phone,
+    nome_fantasia: lead.company || null,
+    decision_maker_name: lead.name || null,
+    segment: lead.segment || null,
+    source: lead.source || "inbound-whatsapp",
+    enrichment_status: "partial",
+    lacunas: lead.lacunas ?? null,
+    notified: true,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (existing) {
+    // Só preenche o que está vazio no registro atual, pra não apagar enriquecimento.
+    const patch = { updated_at: full.updated_at };
+    for (const [key, value] of Object.entries(full)) {
+      if (key === "updated_at") continue;
+      if (value != null && (existing[key] == null || existing[key] === "")) patch[key] = value;
+    }
+    const { data, error } = await db.from(COMPANY_TABLE).update(patch).eq("id", existing.id).select().single();
+    if (error) {
+      logger.error({ err: error }, "❌ Erro ao atualizar lead inbound");
+      return null;
+    }
+    return data;
+  }
+
+  const { data, error } = await db.from(COMPANY_TABLE).insert(full).select().single();
+  if (error) {
+    logger.error({ err: error }, "❌ Erro ao salvar lead inbound");
+    return null;
+  }
+  return data;
+}
+
+async function findCompanyLeadByPhone(phone) {
+  const db = getClient();
+  const { data } = await db
+    .from(COMPANY_TABLE)
+    .select("*")
+    .or(`whatsapp.eq.${phone},telefone.eq.${phone}`)
+    .limit(1)
+    .maybeSingle();
+  return data ?? null;
 }
 
 async function findExistingCompanyLead(lead) {

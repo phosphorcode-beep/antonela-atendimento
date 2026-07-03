@@ -86,6 +86,10 @@ async function fetchCnpja(cnpj) {
     uf: firstOf(data, ["address.state", "uf"]),
     endereco: firstOf(data, ["address.street", "endereco"]),
     matriz: firstOf(data, ["head"]) === true,
+    porteCode: firstOf(data, ["company.size.id"]),
+    porteText: firstOf(data, ["company.size.text", "company.size.acronym"]),
+    capitalSocial: firstOf(data, ["company.equity"]),
+    mei: firstOf(data, ["company.simei.optant"]) === true,
     situacaoAtiva: isAtiva(firstOf(data, ["status.text", "situacao"])),
     qsa: normalizeQsa(data.company?.members ?? data.qsa, {
       nome: ["person.name", "nome"],
@@ -114,6 +118,10 @@ async function fetchCnpjWs(cnpj) {
     uf: firstOf(data, ["estabelecimento.estado.sigla"]),
     endereco: firstOf(data, ["estabelecimento.logradouro"]),
     matriz: firstOf(data, ["estabelecimento.tipo"]) === "Matriz",
+    porteCode: firstOf(data, ["porte.id", "codigo_porte"]),
+    porteText: firstOf(data, ["porte.descricao", "porte"]),
+    capitalSocial: firstOf(data, ["capital_social"]),
+    mei: firstOf(data, ["simples.mei", "simei"]) === "Sim" || firstOf(data, ["estabelecimento.simei"]) === true,
     situacaoAtiva: isAtiva(firstOf(data, ["estabelecimento.situacao_cadastral"])),
     qsa: normalizeQsa(data.socios, {
       nome: ["nome", "nome_socio"],
@@ -140,12 +148,52 @@ async function fetchMinhaReceita(cnpj) {
     uf: firstOf(data, ["uf"]),
     endereco: firstOf(data, ["logradouro"]),
     matriz: firstOf(data, ["identificador_matriz_filial"]) === 1,
+    porteCode: firstOf(data, ["codigo_porte"]),
+    porteText: firstOf(data, ["porte"]),
+    capitalSocial: firstOf(data, ["capital_social"]),
+    mei: firstOf(data, ["opcao_pelo_mei"]) === true || /sim/i.test(String(firstOf(data, ["opcao_pelo_mei"]) ?? "")),
     situacaoAtiva: isAtiva(firstOf(data, ["descricao_situacao_cadastral"])),
     qsa: normalizeQsa(data.qsa, {
       nome: ["nome_socio"],
       qualificacao: ["qualificacao_socio"],
     }),
     source: "minhareceita",
+  };
+}
+
+// ── BrasilAPI (brasilapi.com.br) — espelho dos Dados Abertos da Receita.
+// Exige User-Agent de browser (Cloudflare bloqueia UA não-browser com 403). ──
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36";
+
+async function fetchBrasilApi(cnpj) {
+  await throttle("brasilapi", 3_000);
+  const data = await fetchWithRetry(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, {
+    headers: { "User-Agent": BROWSER_UA, Accept: "application/json" },
+  });
+  if (!data) return null;
+
+  return {
+    razaoSocial: firstOf(data, ["razao_social"]),
+    nomeFantasia: firstOf(data, ["nome_fantasia"]),
+    telefone: normalizePhone(firstOf(data, ["ddd_telefone_1"])),
+    email: lower(firstOf(data, ["email"])),
+    cnaePrincipal: firstOf(data, ["cnae_fiscal"]),
+    cnaeDescricao: firstOf(data, ["cnae_fiscal_descricao"]),
+    cidade: firstOf(data, ["municipio"]),
+    uf: firstOf(data, ["uf"]),
+    endereco: firstOf(data, ["logradouro"]),
+    matriz: firstOf(data, ["identificador_matriz_filial"]) === 1,
+    porteCode: firstOf(data, ["codigo_porte"]),
+    porteText: firstOf(data, ["porte", "descricao_porte"]),
+    capitalSocial: firstOf(data, ["capital_social"]),
+    mei: firstOf(data, ["opcao_pelo_mei"]) === true,
+    situacaoAtiva: isAtiva(firstOf(data, ["descricao_situacao_cadastral"])),
+    qsa: normalizeQsa(data.qsa, {
+      nome: ["nome_socio"],
+      qualificacao: ["qualificacao_socio"],
+    }),
+    source: "brasilapi",
   };
 }
 
@@ -167,6 +215,10 @@ async function fetchOpenCnpj(cnpj) {
     uf: firstOf(data, ["uf"]),
     endereco: firstOf(data, ["logradouro"]),
     matriz: firstOf(data, ["matriz"]) === "Sim",
+    porteCode: firstOf(data, ["codigoPorte", "porte.codigo"]),
+    porteText: firstOf(data, ["porte", "descricaoPorte"]),
+    capitalSocial: firstOf(data, ["capitalSocial", "capital_social"]),
+    mei: firstOf(data, ["opcaoMei", "mei"]) === true || firstOf(data, ["opcaoMei"]) === "Sim",
     situacaoAtiva: isAtiva(firstOf(data, ["situacaoCadastral"])),
     qsa: normalizeQsa(data.socios, {
       nome: ["nomeSocio"],
@@ -176,7 +228,7 @@ async function fetchOpenCnpj(cnpj) {
   };
 }
 
-const PROVIDERS = [fetchCnpja, fetchCnpjWs, fetchMinhaReceita, fetchOpenCnpj];
+const PROVIDERS = [fetchCnpja, fetchBrasilApi, fetchCnpjWs, fetchMinhaReceita, fetchOpenCnpj];
 
 // ── Tenta cada provider em ordem até um responder ─────────────────────────────
 export async function enrichByCnpj(cnpj) {

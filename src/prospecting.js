@@ -19,7 +19,7 @@ function buildMessage(step, lead) {
   const optOut = "Se preferir não receber mais mensagens, é só responder PARAR que eu paro por aqui.";
 
   if (step === "d0") {
-    return `${greet}, tudo bem? Aqui é a Antonela, da Phosphorcode. A gente ajuda empresas de varejo e saúde a organizar melhor a operação com software sob medida. Queria entender rapidinho como está a rotina aí na sua empresa hoje, posso te fazer uma pergunta? ${optOut}`;
+    return `${greet}, tudo bem? Aqui é a Antonela, da Phosphorcode. A gente cria software sob medida pra empresas que cresceram mais rápido que os processos e precisam de mais controle na operação, no estoque e nas equipes. Queria entender rapidinho como está a rotina aí na sua empresa hoje, posso te fazer uma pergunta? ${optOut}`;
   }
   if (step === "d3") {
     return `${greet}, passando de novo por aqui. Sei que a rotina é corrida, mas queria saber se faz sentido pra você entender melhor como a Phosphorcode pode ajudar na sua operação. Tem 2 minutos essa semana? ${optOut}`;

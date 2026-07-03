@@ -8,16 +8,86 @@ function userAgent() {
   return `AntonelaProspecting/1.0 (${contact})`;
 }
 
+// ── Pacing pras APIs públicas (Overpass/Nominatim throttlam agressivo em rodada
+// nacional). Espaça as chamadas e tenta de novo com backoff em 429/5xx ──────
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let lastOverpassAt = 0;
+let lastNominatimAt = 0;
+
+async function pace(ref, minMs) {
+  const wait = ref.at + minMs - Date.now();
+  if (wait > 0) await sleep(wait);
+  ref.at = Date.now();
+}
+const overpassRef = { get at() { return lastOverpassAt; }, set at(v) { lastOverpassAt = v; } };
+const nominatimRef = { get at() { return lastNominatimAt; }, set at(v) { lastNominatimAt = v; } };
+
+async function overpassPost(query, { retries = 3 } = {}) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    await pace(overpassRef, 2500);
+    const res = await fetch(OVERPASS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain; charset=utf-8", Accept: "*/*", "User-Agent": userAgent() },
+      body: query,
+    });
+    if (res.ok) return res.json();
+    if ((res.status === 429 || res.status >= 500) && attempt < retries) {
+      await sleep(attempt * 4000); // backoff: 4s, 8s
+      continue;
+    }
+    throw new Error(`Overpass ${res.status}`);
+  }
+}
+
 // ── Tags OSM por segmento ──────────────────────────────────────────────────────
+const CLINICAS_TAGS = [
+  ["amenity", "clinic"],
+  ["amenity", "doctors"],
+  ["amenity", "dentist"],
+  ["amenity", "hospital"],
+  ["amenity", "pharmacy"],
+  ["healthcare", "*"],
+  ["shop", "beauty"],
+];
+
 const SEGMENT_TAGS = {
-  saude: [
-    ["amenity", "clinic"],
-    ["amenity", "doctors"],
-    ["amenity", "dentist"],
-    ["amenity", "hospital"],
-    ["amenity", "pharmacy"],
-    ["healthcare", "*"],
+  industria: [
+    ["industrial", "*"],
+    ["man_made", "works"],
+    ["building", "industrial"],
+    ["landuse", "industrial"],
   ],
+  distribuidora: [
+    ["shop", "wholesale"],
+    ["shop", "trade"],
+    ["building", "warehouse"],
+    ["industrial", "warehouse"],
+    ["office", "logistics"],
+  ],
+  servicos_campo: [
+    ["craft", "electrician"],
+    ["craft", "plumber"],
+    ["craft", "hvac"],
+    ["craft", "carpenter"],
+    ["craft", "roofer"],
+    ["shop", "doityourself"],
+  ],
+  clinicas: CLINICAS_TAGS,
+  franquias: [
+    ["shop", "*"],
+    ["amenity", "restaurant"],
+    ["amenity", "fast_food"],
+    ["amenity", "cafe"],
+    ["leisure", "fitness_centre"],
+  ],
+  agro: [
+    ["shop", "agrarian"],
+    ["shop", "farm"],
+    ["industrial", "food"],
+    ["craft", "winery"],
+    ["man_made", "silo"],
+  ],
+  saude: CLINICAS_TAGS,
   varejo: [
     ["shop", "*"],
   ],
@@ -30,6 +100,7 @@ export async function geocodeCity(city, uf) {
   url.searchParams.set("format", "json");
   url.searchParams.set("limit", "1");
 
+  await pace(nominatimRef, 1200);
   const res = await fetch(url, { headers: { "User-Agent": userAgent() } });
   if (!res.ok) throw new Error(`Nominatim ${res.status}`);
 
@@ -55,14 +126,7 @@ export async function searchBusinesses({ boundingbox, segment, maxResults = 20 }
 
   const query = `[out:json][timeout:25];(${clauses});out center ${maxResults};`;
 
-  const res = await fetch(OVERPASS_URL, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain; charset=utf-8", Accept: "*/*", "User-Agent": userAgent() },
-    body: query,
-  });
-  if (!res.ok) throw new Error(`Overpass ${res.status}`);
-
-  const data = await res.json();
+  const data = await overpassPost(query);
   const businesses = mapOverpassElements(data.elements ?? [], maxResults);
 
   logger.info({ segment, count: businesses.length }, "🗺️  Negócios encontrados via Overpass");
@@ -101,14 +165,7 @@ export async function searchByName(name, { maxResults = 5 } = {}) {
   const escaped = name.replace(/["\\]/g, "");
   const query = `[out:json][timeout:25];(node["name"~"${escaped}",i](${bbox});way["name"~"${escaped}",i](${bbox}););out center ${maxResults};`;
 
-  const res = await fetch(OVERPASS_URL, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain; charset=utf-8", Accept: "*/*", "User-Agent": userAgent() },
-    body: query,
-  });
-  if (!res.ok) throw new Error(`Overpass ${res.status}`);
-
-  const data = await res.json();
+  const data = await overpassPost(query);
   const businesses = mapOverpassElements(data.elements ?? [], maxResults);
 
   logger.info({ name, city, uf, count: businesses.length }, "🗺️  Busca por nome no Overpass (restrita à cidade-alvo)");

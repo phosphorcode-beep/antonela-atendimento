@@ -3,8 +3,10 @@ import { enrichByCnpj } from "./cnpjProviders.js";
 import { geocodeCity, searchBusinesses } from "./discovery.js";
 import { brasilioEnabled, searchByCnae } from "./brasilioProvider.js";
 import { apifyEnabled, searchApifyBusinesses } from "./apifyProvider.js";
-import { braveSearchEnabled, findSocialLinks, findDecisionMakerMention } from "./braveSearch.js";
+import { braveSearchEnabled, findOfficialWebsite, findSocialLinks, findDecisionMakerMention } from "./braveSearch.js";
 import { computeConfidence, computeTier } from "./confidence.js";
+import { getNicheProfile } from "./niches.js";
+import { classifyPorte, evaluateSize } from "./sizing.js";
 import { upsertCompanyLead } from "./supabase.js";
 import { notifyLeadsGroup } from "./notify.js";
 
@@ -49,6 +51,36 @@ function extractInstagramFromHtml(html) {
   return null;
 }
 
+// ── E-mail: prioriza mailto:, cai pra regex no corpo. Descarta lixo comum de
+// front-end (imagens @2x, sentry, wixpress, exemplos) que casa com o padrão ──
+const EMAIL_JUNK_RE = /(sentry|wixpress|example|@2x|\.png|\.jpg|\.svg|\.gif|\.webp|domain\.com|email\.com|seuemail|your-?email)/i;
+function extractEmailFromHtml(html) {
+  const mailto = html.match(/mailto:([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})/i);
+  if (mailto && !EMAIL_JUNK_RE.test(mailto[1])) return mailto[1].toLowerCase();
+
+  for (const m of html.matchAll(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi)) {
+    if (!EMAIL_JUNK_RE.test(m[0])) return m[0].toLowerCase();
+  }
+  return null;
+}
+
+// ── WhatsApp: links wa.me / api.whatsapp.com. Valida DDD+número BR (10-13 díg). ─
+function extractWhatsappFromHtml(html) {
+  const m = html.match(/(?:wa\.me\/|api\.whatsapp\.com\/send\?phone=)(\+?\d{10,13})/i);
+  if (!m) return null;
+  const digits = m[1].replace(/\D/g, "");
+  return digits.length >= 10 ? digits : null;
+}
+
+// ── Telefone: link tel:. Só dígitos, exige tamanho plausível de fixo/celular BR ─
+function extractPhoneFromHtml(html) {
+  for (const m of html.matchAll(/tel:(\+?[\d\s().-]{8,20})/gi)) {
+    const digits = m[1].replace(/\D/g, "");
+    if (digits.length >= 10 && digits.length <= 13) return digits;
+  }
+  return null;
+}
+
 // ── Busca o HTML do site (usado tanto pro CNPJ quanto pro Instagram) ─────────
 export async function fetchSiteHtml(website) {
   if (!website) return null;
@@ -67,12 +99,17 @@ export async function fetchSiteHtml(website) {
 // política de privacidade, e ela quase sempre lista a razão social/CNPJ) ─────
 const CNPJ_FALLBACK_PATHS = ["/politica-de-privacidade", "/termos-de-uso"];
 
-// ── Extrai os sinais disponíveis no site: CNPJ (validado) e Instagram ───────
+// ── Extrai os sinais disponíveis no site: CNPJ (validado), Instagram e contatos
+// (e-mail, telefone, WhatsApp). Os contatos ajudam a acionar leads que só têm
+// site, sem depender de enriquecimento por CNPJ ────────────────────────────
 export async function extractSiteSignals(website) {
   const homeHtml = await fetchSiteHtml(website);
-  if (!homeHtml) return { cnpj: null, instagram: null };
+  if (!homeHtml) return { cnpj: null, instagram: null, email: null, telefone: null, whatsapp: null };
 
   const instagram = extractInstagramFromHtml(homeHtml);
+  const email = extractEmailFromHtml(homeHtml);
+  const whatsapp = extractWhatsappFromHtml(homeHtml);
+  const telefone = extractPhoneFromHtml(homeHtml) || whatsapp;
   let cnpj = extractCnpjFromHtml(homeHtml);
 
   if (!cnpj) {
@@ -85,7 +122,7 @@ export async function extractSiteSignals(website) {
     }
   }
 
-  return { cnpj, instagram };
+  return { cnpj, instagram, email, telefone, whatsapp };
 }
 
 // ── Prioridade de qualificação pra inferir o decisor provável ─────────────────
@@ -116,9 +153,10 @@ export function inferDecisionMaker(qsa) {
 // ── Score de oportunidade (0-100) ─────────────────────────────────────────────
 export function calculateFitScore(lead, segment) {
   const targetCity = (process.env.PROSPECT_TARGET_CITY || "Brasília").toLowerCase();
+  const profile = getNicheProfile(segment);
   let score = 0;
 
-  if (segment === "saude") score += 25;
+  if (profile) score += profile.priority <= 2 ? 30 : 25;
   if ((lead.cidade || "").toLowerCase().includes(targetCity)) score += 15;
   if (lead.situacaoAtiva === true || lead.situacaoAtiva === null) score += 10;
   if (lead.nomeFantasia) score += 10;
@@ -127,18 +165,15 @@ export function calculateFitScore(lead, segment) {
   if (lead.decisionMakerConfidence >= 0.7) score += 15;
   if (lead.matriz) score += 10;
   if (lead.website) score += 10;
+  // Porte confirmado dentro do alvo (PME/MEI) é sinal forte de fit comercial.
+  if (lead.sizeKnown && lead.sizeIsTarget) score += 15;
 
   return Math.min(score, 100);
 }
 
-const DOR_HIPOTESE = {
-  saude: "agendamento e atendimento ao paciente",
-  varejo: "controle de estoque e vendas",
-};
-
 function segmentLabel(segment) {
-  if (segment === "saude") return "saúde";
-  if (segment === "varejo") return "varejo";
+  const profile = getNicheProfile(segment);
+  if (profile) return profile.label;
   return "sua área de atuação";
 }
 
@@ -150,12 +185,13 @@ export function buildOutreachMessage(lead, segment) {
 
   const nome = lead.decisionMakerName ? lead.decisionMakerName.split(/\s+/)[0] : null;
   const empresa = lead.nomeFantasia || lead.razaoSocial;
-  const cidade = lead.cidade || "sua cidade";
-  const dor = DOR_HIPOTESE[segment] || "atendimento e operação";
+  const local = lead.cidade ? ` em ${lead.cidade}` : "";
+  const profile = getNicheProfile(segment);
+  const dor = profile?.outreachPain || "operação, controle e rastreabilidade";
 
   const saudacao = nome ? `Olá, ${nome}.` : "Olá.";
 
-  return `${saudacao} Vi que a ${empresa} atua em ${segmentLabel(segment)} em ${cidade}. Pela estrutura pública da empresa e pelo perfil operacional do segmento, parece haver oportunidade de melhorar ${dor}, especialmente em atendimento, agenda, controle interno ou relatórios. A Phosphorcode cria sistemas próprios e integrações pra operações desse tipo. Faz sentido eu mandar 3 ideias objetivas pra esse cenário?`;
+  return `${saudacao} Vi a ${empresa}${local}. Pode haver espaço para ganhar controle em ${dor}. A Phosphorcode cria sistemas sob medida para empresas que cresceram mais rápido que os processos. Posso te mandar uma ideia rápida?`;
 }
 
 // ── Compara dois nomes de forma tolerante (case/acento/ordem de palavras) pra
@@ -187,12 +223,27 @@ export async function buildLead(business, segment) {
   const lacunas = [];
 
   let cnpj = business.cnpj || null;
+  let website = business.website || null;
   let instagram = business.instagram || null;
+  let siteEmail = null;
+  let siteTelefone = null;
+  let siteWhatsapp = null;
 
-  if (business.website) {
-    const signals = await extractSiteSignals(business.website);
+  // Sem site nem CNPJ: tenta descobrir o site oficial via Brave. É o que
+  // destrava o CNPJ (e daí porte/decisor) pra leads que só vieram do Overpass.
+  if (!website && !cnpj && braveSearchEnabled() && business.nome) {
+    website = await findOfficialWebsite({ nome: business.nome, cidade: business.cidade });
+    if (website) fontes.push("brave-site");
+  }
+
+  if (website) {
+    const signals = await extractSiteSignals(website);
     cnpj = cnpj || signals.cnpj;
-    instagram = signals.instagram;
+    instagram = instagram || signals.instagram;
+    siteEmail = signals.email;
+    siteTelefone = signals.telefone;
+    siteWhatsapp = signals.whatsapp;
+    if (siteEmail || siteTelefone || siteWhatsapp) fontes.push("site");
   }
 
   let enriched = null;
@@ -241,14 +292,25 @@ export async function buildLead(business, segment) {
 
   if (!decisionMaker.nome) lacunas.push("decisor não confirmado");
 
+  // ── Porte/tamanho: só é conhecido quando há dado de CNPJ (enriquecimento ou
+  // brasil.io). Usado pra filtrar empresas grandes (foco em PME/MEI) ─────────
+  const porte = classifyPorte({
+    code: enriched?.porteCode ?? business.porteCode,
+    text: enriched?.porteText,
+    mei: enriched?.mei,
+  });
+  const capitalSocial = enriched?.capitalSocial ?? business.capitalSocial ?? null;
+  const size = evaluateSize({ porte, capitalSocial });
+
   const lead = {
+    segment,
     cnpj: cnpj || null,
     razaoSocial: enriched?.razaoSocial || business.razaoSocial || null,
     nomeFantasia: enriched?.nomeFantasia || business.nome || null,
-    telefone: enriched?.telefone || business.telefone || null,
-    whatsapp: enriched?.telefone || business.telefone || null,
-    email: enriched?.email || business.email || null,
-    website: business.website || null,
+    telefone: enriched?.telefone || business.telefone || siteTelefone || null,
+    whatsapp: enriched?.telefone || business.telefone || siteWhatsapp || siteTelefone || null,
+    email: enriched?.email || business.email || siteEmail || null,
+    website: website || null,
     instagram: instagram || null,
     linkedin: linkedin || null,
     cnaePrincipal: enriched?.cnaePrincipal || business.cnaePrincipal || null,
@@ -257,6 +319,11 @@ export async function buildLead(business, segment) {
     uf: enriched?.uf || business.uf || null,
     endereco: enriched?.endereco || business.endereco || null,
     matriz: enriched?.matriz ?? null,
+    porte: porte || null,
+    capitalSocial: capitalSocial ?? null,
+    sizeKnown: size.known,
+    sizeIsTarget: size.isTarget,
+    sizeReason: size.reason,
     situacaoAtiva: enriched?.situacaoAtiva ?? business.situacaoAtiva ?? null,
     decisionMakerName: decisionMaker.nome,
     decisionMakerRole: decisionMaker.qualificacao,
@@ -268,6 +335,7 @@ export async function buildLead(business, segment) {
 
   if (!lead.telefone) lacunas.push("telefone não encontrado");
   if (!lead.email) lacunas.push("email não encontrado");
+  if (!size.known) lacunas.push("porte não confirmado");
   lead.lacunas = lacunas;
 
   lead.fitScore = calculateFitScore(lead, segment);
@@ -282,7 +350,9 @@ export async function buildLead(business, segment) {
 // ── Saída no schema estruturado pedido (JSON, pra log/consumo por outro sistema
 // depois — o card do WhatsApp continua sendo a versão humana) ───────────────
 export function toStructuredOutput(lead) {
+  const profile = getNicheProfile(lead.segment);
   return {
+    nicho: profile?.label ?? null,
     empresa: lead.nomeFantasia || lead.razaoSocial || null,
     cnpj: lead.cnpj,
     site: lead.website,
@@ -292,10 +362,14 @@ export function toStructuredOutput(lead) {
     linkedin: lead.linkedin,
     decisor_nome: lead.decisionMakerName,
     decisor_cargo: lead.decisionMakerRole,
+    porte: lead.porte,
+    capital_social: lead.capitalSocial,
     fontes: lead.fontes,
     confianca: lead.confianca,
     tier: lead.tier,
     lacunas: lead.lacunas,
+    dor_principal: profile?.pain ?? null,
+    oferta: profile?.offer ?? null,
   };
 }
 
@@ -304,10 +378,20 @@ export async function processCompany(business, segment) {
   const lead = await buildLead(business, segment);
   logger.info(toStructuredOutput(lead), "📊 Lead processado");
 
+  // Filtro de tamanho: descarta empresa grande (foco em PME/MEI). Só filtra
+  // quando o porte é conhecido — sem dado, o lead segue e fica sinalizado.
+  if (lead.sizeKnown && !lead.sizeIsTarget) {
+    logger.info(
+      { empresa: lead.nomeFantasia || lead.razaoSocial, porte: lead.porte, capital: lead.capitalSocial },
+      "⏭️  Lead descartado (empresa grande, fora do alvo PME/MEI)",
+    );
+    return { lead, saved: null, filtered: true };
+  }
+
   const saved = await upsertCompanyLead(lead);
   if (saved) await notifyLeadsGroup(formatLeadCard(lead));
 
-  return { lead, saved };
+  return { lead, saved, filtered: false };
 }
 
 // ── Dedup entre fontes de descoberta (Overpass + brasil.io): por CNPJ quando
@@ -326,7 +410,7 @@ function dedupCandidates(businesses) {
   return result;
 }
 
-function buildRoundSummary(leads) {
+function buildRoundSummary(leads, filtered = 0) {
   const byTier = { A: 0, B: 0, C: 0 };
   const lacunaCounts = new Map();
   let comDecisor = 0;
@@ -348,6 +432,7 @@ function buildRoundSummary(leads) {
     `📊 *Resumo da rodada*`,
     `Tier A: ${byTier.A} · Tier B: ${byTier.B} · Tier C: ${byTier.C}`,
     `Decisor confirmado: ${comDecisor}/${leads.length}`,
+    filtered ? `Descartadas por porte (grandes): ${filtered}` : null,
     topLacunas.length ? `Maiores lacunas: ${topLacunas.join(", ")}` : null,
   ].filter(Boolean);
 
@@ -384,19 +469,30 @@ export function buildCompanySummary(lead, segment) {
 // ── Card visual pro grupo (usado tanto na descoberta automática quanto no /empresa).
 // Cada seção só aparece se tiver pelo menos um dado real — nada de "não identificado"
 // poluindo o card quando a informação simplesmente não existe ──────────────────
+const PORTE_LABEL = { MEI: "MEI", ME: "Microempresa", EPP: "Pequeno porte", DEMAIS: "Médio/grande" };
+
 export function formatLeadCard(lead) {
   const divider = "───────────────────";
   const titulo = lead.nomeFantasia || lead.razaoSocial || domainFallback(lead.website) || "Empresa não identificada";
   const local = [lead.cidade, lead.uf].filter(Boolean).join("/");
+  const profile = getNicheProfile(lead.segment);
 
   const sections = [];
 
   sections.push([`🏢 *${titulo}*`, `📝 ${lead.summary}`]);
 
+  if (profile) {
+    sections.push([
+      `🎯 *Dor provável:* ${profile.pain}`,
+      `🧩 *Oferta:* ${profile.offer}`,
+    ]);
+  }
+
   sections.push(
     [
       lead.cnpj ? `📋 *CNPJ:* ${lead.cnpj}` : null,
       lead.razaoSocial && lead.razaoSocial !== titulo ? `🏛️ *Razão social:* ${lead.razaoSocial}` : null,
+      lead.porte ? `🏷️ *Porte:* ${PORTE_LABEL[lead.porte] || lead.porte}` : null,
       local ? `📍 *Local:* ${local}` : null,
       lead.endereco ? `🗺️ *Endereço:* ${lead.endereco}` : null,
     ].filter(Boolean),
@@ -433,31 +529,78 @@ export function formatLeadCard(lead) {
     .join(`\n${divider}\n`);
 }
 
+// ── Maiores cidades/metrópoles do Brasil, usadas quando a rodada é nacional
+// (sem cidade fixa). Cobre as 5 regiões pra espalhar os leads pelo país ─────
+export const MAJOR_CITIES = [
+  ["São Paulo", "SP"], ["Rio de Janeiro", "RJ"], ["Belo Horizonte", "MG"],
+  ["Curitiba", "PR"], ["Porto Alegre", "RS"], ["Goiânia", "GO"],
+  ["Salvador", "BA"], ["Fortaleza", "CE"], ["Recife", "PE"],
+  ["Brasília", "DF"], ["Campinas", "SP"], ["Manaus", "AM"],
+  ["Belém", "PA"], ["Florianópolis", "SC"], ["Vitória", "ES"],
+];
+
+function shuffle(list) {
+  const a = [...list];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 // ── Ponto de entrada: descoberta em cascata (Overpass + brasil.io), dedup,
-// processa cada candidato e fecha com um resumo da rodada no grupo ──────────
-export async function runDiscovery({ city, uf, segment, cnae, maxResults = 20 }) {
-  logger.info({ city, uf, segment, cnae, maxResults }, "🔎 Iniciando descoberta de leads");
+// processa cada candidato e fecha com um resumo da rodada no grupo. Aceita uma
+// cidade única (`city`/`uf`) ou uma lista `cities` (rodada nacional: gira por
+// várias cidades, pegando um punhado de cada até juntar candidatos) ─────────
+export async function runDiscovery({ city, uf, segment, cnae, maxResults = 20, cities = null }) {
+  const nationwide = Array.isArray(cities) && cities.length > 0;
+  logger.info({ city, uf, segment, cnae, maxResults, nationwide }, "🔎 Iniciando descoberta de leads");
+
+  // Em rodada nacional, embaralha e limita quantas cidades tentar (o Overpass
+  // público throttla se batermos em muitas em sequência).
+  const targets = nationwide ? shuffle(cities).slice(0, 8) : [[city, uf]];
+  const perCity = nationwide ? Math.max(2, Math.ceil(maxResults / 4)) : maxResults;
+
+  let overpassResults = [];
+  for (const [c, u] of targets) {
+    if (overpassResults.length >= maxResults * 2) break; // já há candidatos de sobra
+    try {
+      const { boundingbox } = await geocodeCity(c, u);
+      let r = await searchBusinesses({ boundingbox, segment, maxResults: perCity });
+      r = r.map((business) => ({ ...business, cidade: business.cidade || c, uf: business.uf || u }));
+      overpassResults.push(...r);
+    } catch (err) {
+      logger.warn({ err: err.message, city: c, uf: u, segment }, "Geocode/Overpass falhou pra cidade; seguindo");
+    }
+  }
 
   let apifyResults = [];
   if (apifyEnabled()) {
-    apifyResults = await searchApifyBusinesses({ city, uf, segment, maxResults });
+    for (const [c, u] of targets) {
+      if (apifyResults.length >= maxResults * 2) break;
+      const r = await searchApifyBusinesses({ city: c, uf: u, segment, maxResults: perCity });
+      apifyResults.push(...r);
+    }
   }
-
-  const { boundingbox } = await geocodeCity(city, uf);
-  const overpassResults = await searchBusinesses({ boundingbox, segment, maxResults });
 
   let brasilioResults = [];
   if (cnae && brasilioEnabled()) {
-    brasilioResults = await searchByCnae({ cnae, municipio: city, uf, maxResults });
+    const [bc, bu] = targets[0];
+    brasilioResults = await searchByCnae({ cnae, municipio: bc, uf: bu, maxResults });
   }
 
   const businesses = dedupCandidates([...apifyResults, ...overpassResults, ...brasilioResults]).slice(0, maxResults);
 
   let processed = 0;
+  let filtered = 0;
   const leads = [];
   for (const business of businesses) {
     try {
-      const { lead, saved } = await processCompany(business, segment);
+      const { lead, saved, filtered: wasFiltered } = await processCompany(business, segment);
+      if (wasFiltered) {
+        filtered += 1;
+        continue; // empresa grande: fora do alvo, não entra no resumo
+      }
       leads.push(lead);
       if (saved) processed += 1;
     } catch (err) {
@@ -465,8 +608,8 @@ export async function runDiscovery({ city, uf, segment, cnae, maxResults = 20 })
     }
   }
 
-  if (leads.length) await notifyLeadsGroup(buildRoundSummary(leads));
+  if (leads.length || filtered) await notifyLeadsGroup(buildRoundSummary(leads, filtered));
 
-  logger.info({ found: businesses.length, processed }, "✅ Descoberta de leads concluída");
-  return { found: businesses.length, processed };
+  logger.info({ found: businesses.length, processed, filtered }, "✅ Descoberta de leads concluída");
+  return { found: businesses.length, processed, filtered };
 }
