@@ -2,6 +2,7 @@ import { logger } from "./logger.js";
 import { enrichByCnpj } from "./cnpjProviders.js";
 import { geocodeCity, searchBusinesses } from "./discovery.js";
 import { brasilioEnabled, searchByCnae } from "./brasilioProvider.js";
+import { apifyEnabled, searchApifyBusinesses } from "./apifyProvider.js";
 import { braveSearchEnabled, findSocialLinks, findDecisionMakerMention } from "./braveSearch.js";
 import { computeConfidence, computeTier } from "./confidence.js";
 import { upsertCompanyLead } from "./supabase.js";
@@ -186,7 +187,7 @@ export async function buildLead(business, segment) {
   const lacunas = [];
 
   let cnpj = business.cnpj || null;
-  let instagram = null;
+  let instagram = business.instagram || null;
 
   if (business.website) {
     const signals = await extractSiteSignals(business.website);
@@ -207,7 +208,7 @@ export async function buildLead(business, segment) {
   if (decisionMaker.nome) fontes.push("qsa");
 
   const nomeEmpresa = enriched?.nomeFantasia || enriched?.razaoSocial || business.nome || business.razaoSocial;
-  let linkedin = null;
+  let linkedin = business.linkedin || null;
 
   // ── Busca web (opcional): Instagram/LinkedIn e cross-validação do decisor ──
   if (braveSearchEnabled() && nomeEmpresa) {
@@ -218,7 +219,7 @@ export async function buildLead(business, segment) {
       instagram = social.instagram;
       fontes.push("brave-instagram");
     }
-    if (social.linkedin) {
+    if (social.linkedin && !linkedin) {
       linkedin = social.linkedin;
       fontes.push("brave-linkedin");
     }
@@ -246,7 +247,7 @@ export async function buildLead(business, segment) {
     nomeFantasia: enriched?.nomeFantasia || business.nome || null,
     telefone: enriched?.telefone || business.telefone || null,
     whatsapp: enriched?.telefone || business.telefone || null,
-    email: enriched?.email || null,
+    email: enriched?.email || business.email || null,
     website: business.website || null,
     instagram: instagram || null,
     linkedin: linkedin || null,
@@ -437,6 +438,11 @@ export function formatLeadCard(lead) {
 export async function runDiscovery({ city, uf, segment, cnae, maxResults = 20 }) {
   logger.info({ city, uf, segment, cnae, maxResults }, "🔎 Iniciando descoberta de leads");
 
+  let apifyResults = [];
+  if (apifyEnabled()) {
+    apifyResults = await searchApifyBusinesses({ city, uf, segment, maxResults });
+  }
+
   const { boundingbox } = await geocodeCity(city, uf);
   const overpassResults = await searchBusinesses({ boundingbox, segment, maxResults });
 
@@ -445,7 +451,7 @@ export async function runDiscovery({ city, uf, segment, cnae, maxResults = 20 })
     brasilioResults = await searchByCnae({ cnae, municipio: city, uf, maxResults });
   }
 
-  const businesses = dedupCandidates([...overpassResults, ...brasilioResults]).slice(0, maxResults);
+  const businesses = dedupCandidates([...apifyResults, ...overpassResults, ...brasilioResults]).slice(0, maxResults);
 
   let processed = 0;
   const leads = [];

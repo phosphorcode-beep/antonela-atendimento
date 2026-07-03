@@ -209,6 +209,7 @@ Nenhuma das 4 APIs gratuitas de CNPJ (CNPJá, CNPJ.ws, Minha Receita, OpenCNPJ) 
 
 1. **OpenStreetMap** (Nominatim + Overpass) — bom pra negócio físico, busca por tags do segmento (`saude`/`varejo`) dentro da cidade.
 2. **brasil.io** (opcional, precisa de `BRASILIO_API_TOKEN`) — busca por CNAE + município direto nos Dados Abertos da Receita Federal. É o único jeito gratuito de buscar por CNAE; sem token, a descoberta cai só pro Overpass.
+3. **Apify Google Maps Scraper** (opcional, precisa de `APIFY_API_TOKEN`) — busca empresas no Google Maps por termo + cidade, trazendo telefone, site e, se habilitado, contatos do site.
 
 Os candidatos das duas fontes são deduplicados (por CNPJ, ou por nome normalizado quando não há CNPJ) antes de gastar esforço enriquecendo. Pra cada candidato: o CNPJ é extraído do próprio site quando não veio pronto (regex no HTML da home e, se não achar, também em `/politica-de-privacidade` e `/termos-de-uso` — testado com um caso real onde o CNPJ só aparecia nessas páginas), o CNPJ é enriquecido via os 4 providers (razão social, QSA, situação), e opcionalmente (com `BRAVE_API_KEY`) uma busca web tenta achar Instagram, LinkedIn e menções ao decisor, cruzando o nome achado com o QSA — decisor confirmado em 2 fontes independentes (QSA + LinkedIn/menção web) sobe a confiança pra "alta". Quando não há site nem CNPJ visível, o lead ainda é salvo e notificado, mas com `enrichment_status = partial` e a lacuna registrada.
 
@@ -284,6 +285,8 @@ alter table company_leads
 ```
 
 Variáveis necessárias: `LEADS_GROUP_JID` (grupo "Phosphor Leads" — também é o único grupo onde o comando `/empresa` é aceito), `PROSPECT_TARGET_CITY`/`PROSPECT_TARGET_UF` (bônus de score e cidade usada na busca por nome), `PROSPECT_CONTACT_EMAIL` (exigido pela política de uso do Nominatim). Reaproveita `SUPABASE_URL`/`SUPABASE_SERVICE_KEY` já configurados pra cadência. Opcionais: `BRASILIO_API_TOKEN` (descoberta por CNAE) e `BRAVE_API_KEY` (Instagram/LinkedIn/decisor via busca web) — sem elas o sistema funciona igual, só sem essas duas fontes extras.
+
+Para usar Apify na descoberta, configure `APIFY_API_TOKEN`. O actor padrão é `compass/crawler-google-places`, customizável por `APIFY_GOOGLE_MAPS_ACTOR`; termos customizados vão em `APIFY_SEARCH_TERMS=clinica,dentista`. `APIFY_SCRAPE_CONTACTS=true` habilita o add-on pago de contatos do site quando sua conta/actor permitir.
 
 Nenhuma mensagem é enviada automaticamente ao lead — o texto sugerido só vai pro grupo interno, para aprovação humana antes de qualquer contato.
 
