@@ -1,10 +1,11 @@
 // ── Nível de confiança no decisor/dados do lead, baseado em quantas fontes
 // independentes concordam — não em achismo. Ver metodologia no plano: ALTA
-// exige ≥2 fontes confirmando o mesmo decisor (ex: QSA + LinkedIn); MÉDIA é
+// exige ≥2 fontes confirmando o mesmo decisor (ex: QSA + menção/contato pessoal);
+// LinkedIn empresarial não conta como fonte do decisor. MÉDIA é
 // 1 fonte só; BAIXA é quando não há decisor identificado ────────────────────
 export function computeConfidence(lead) {
   const decisorFontes = (lead.fontes ?? []).filter((f) =>
-    ["qsa", "brave-linkedin", "brave-decisor", "brave-decisor-contato"].includes(f),
+    ["qsa", "brave-decisor", "brave-decisor-contato"].includes(f),
   );
 
   if (!lead.decisionMakerName) return "baixa";

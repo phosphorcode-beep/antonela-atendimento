@@ -1,9 +1,18 @@
 import { logger } from "./logger.js";
 
 const SEARCH_URL = "https://api.search.brave.com/res/v1/web/search";
+const DECISION_CONTACT_PROFILE_QUERIES = envInt("PROSPECT_DECISION_CONTACT_PROFILE_QUERIES", 2);
+const DECISION_CONTACT_SNIPPET_QUERIES = envInt("PROSPECT_DECISION_CONTACT_SNIPPET_QUERIES", 2);
+const DECISION_CONTACT_OFFICIAL_PAGES = envInt("PROSPECT_DECISION_CONTACT_OFFICIAL_PAGES", 4);
+const DECISION_MENTION_QUERIES = envInt("PROSPECT_DECISION_MENTION_QUERIES", 2);
 
 export function braveSearchEnabled() {
   return Boolean(process.env.BRAVE_API_KEY);
+}
+
+function envInt(name, fallback) {
+  const value = Number.parseInt(process.env[name] || "", 10);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
 // ── Rate limit simples: plano grátis do Brave é 1 req/s ──────────────────────
@@ -128,7 +137,7 @@ export async function findDecisionMakerContacts({ nome, empresa, website, cidade
     `site:instagram.com "${nome}"${companyHint}`,
     `site:facebook.com "${nome}"${companyHint}`,
   ];
-  const profileResults = await searchMany(profileQueries, 5);
+  const profileResults = await searchMany(profileQueries.slice(0, DECISION_CONTACT_PROFILE_QUERIES), 5);
   found.linkedin = firstPersonalLinkedin(profileResults);
   found.instagram = firstInstagramHandleForName(profileResults, nome);
   if (found.linkedin) addSource(found.linkedin, "perfil-pessoal-linkedin");
@@ -146,7 +155,7 @@ export async function findDecisionMakerContacts({ nome, empresa, website, cidade
     `"${nome}"${companyHint} (celular OR WhatsApp OR "fale com")`,
     `"${nome}"${companyHint}${roleHint} (LinkedIn OR Instagram OR contato)`,
   ];
-  const contactResults = await searchMany(contactQueries, 5);
+  const contactResults = await searchMany(contactQueries.slice(0, DECISION_CONTACT_SNIPPET_QUERIES), 5);
   for (const r of contactResults) {
     const text = `${r.title ?? ""} ${r.description ?? ""} ${r.url ?? ""}`;
     absorbText(text, r.url, "snippet-publico");
@@ -185,7 +194,7 @@ async function findOfficialPagesMentioningPerson({ nome, empresa, website }) {
   const base = normalizeWebsiteBase(website);
 
   if (base) {
-    for (const path of OFFICIAL_PERSON_PATHS) {
+    for (const path of OFFICIAL_PERSON_PATHS.slice(0, DECISION_CONTACT_OFFICIAL_PAGES)) {
       const url = `${base}${path}`;
       const text = await fetchPublicText(url);
       if (text && textMentionsName(text, nome)) pages.push({ url, text });
@@ -318,7 +327,7 @@ export async function findDecisionMakerMention({ nome }) {
     `"${nome}" ("sócia" OR "fundadora" OR "diretora" OR "proprietária")`,
     `site:linkedin.com/in "${nome}" (fundador OR diretor OR CEO OR sócio OR proprietário)`,
   ];
-  const results = await searchMany(queries, 5);
+  const results = await searchMany(queries.slice(0, DECISION_MENTION_QUERIES), 5);
 
   for (const r of results) {
     const text = `${r.title} ${r.description}`;

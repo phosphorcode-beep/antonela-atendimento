@@ -42,19 +42,49 @@ function maxCapital() {
   return Number.isFinite(v) && v > 0 ? v : 10_000_000;
 }
 
+function requireSizeKnown() {
+  return String(process.env.PROSPECT_REQUIRE_SIZE_KNOWN ?? "true").toLowerCase() !== "false";
+}
+
+function parseCapitalSocial(value) {
+  if (value == null || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  const cleaned = raw.replace(/[^\d,.-]/g, "");
+  if (!cleaned) return null;
+
+  const normalized =
+    cleaned.includes(",") && cleaned.includes(".")
+      ? cleaned.replace(/\./g, "").replace(",", ".")
+      : cleaned.includes(",")
+        ? cleaned.replace(",", ".")
+        : (cleaned.match(/\./g)?.length ?? 0) > 1
+          ? cleaned.replace(/\./g, "")
+        : cleaned;
+
+  const capital = Number(normalized);
+  return Number.isFinite(capital) ? capital : null;
+}
+
 // Decide se o lead é do tamanho-alvo (PME/MEI). Só reprova quando HÁ dado de
-// porte/capital; sem dado nenhum, mantém (não dá pra afirmar que é grande) e
-// sinaliza a incerteza pra revisão humana.
+// porte/capital. Por padrão, sem dado nenhum também reprova: evita empresa
+// grande escapando por vir de fonte sem CNPJ/porte. Use
+// PROSPECT_REQUIRE_SIZE_KNOWN=false para voltar ao modo permissivo.
 export function evaluateSize({ porte, capitalSocial } = {}) {
-  // Atenção: Number(null) é 0 (não NaN), então trata null/"" como ausência ANTES
-  // de converter, senão capital vazio viraria 0 e "known" ficaria true à toa.
-  const capital =
-    capitalSocial == null || capitalSocial === "" || !Number.isFinite(Number(capitalSocial))
-      ? null
-      : Number(capitalSocial);
+  const capital = parseCapitalSocial(capitalSocial);
   const known = Boolean(porte) || capital != null;
 
-  if (!known) return { known: false, isTarget: true, porte: null, reason: "porte não confirmado" };
+  if (!known) {
+    return {
+      known: false,
+      isTarget: !requireSizeKnown(),
+      porte: null,
+      reason: requireSizeKnown() ? "fora do alvo: porte não confirmado" : "porte não confirmado",
+    };
+  }
 
   const rank = porte ? (RANK[porte] ?? RANK.DEMAIS) : RANK.DEMAIS;
   const overPorte = Boolean(porte) && rank > maxPorteRank();

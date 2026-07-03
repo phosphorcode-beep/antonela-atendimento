@@ -338,7 +338,7 @@ export async function buildLead(business, segment) {
     razaoSocial: enriched?.razaoSocial || business.razaoSocial || null,
     nomeFantasia: enriched?.nomeFantasia || business.nome || null,
     telefone: enriched?.telefone || business.telefone || siteTelefone || null,
-    whatsapp: enriched?.telefone || business.telefone || siteWhatsapp || siteTelefone || null,
+    whatsapp: business.whatsapp || siteWhatsapp || null,
     email: enriched?.email || business.email || siteEmail || null,
     website: website || null,
     instagram: instagram || null,
@@ -425,12 +425,17 @@ export async function processCompany(business, segment) {
   const lead = await buildLead(business, segment);
   logger.info(toStructuredOutput(lead), "📊 Lead processado");
 
-  // Filtro de tamanho: descarta empresa grande (foco em PME/MEI). Só filtra
-  // quando o porte é conhecido — sem dado, o lead segue e fica sinalizado.
-  if (lead.sizeKnown && !lead.sizeIsTarget) {
+  // Filtro de tamanho: descarta empresas fora do alvo PME/MEI. Em modo estrito
+  // (padrão), porte desconhecido também é descartado para evitar grandes.
+  if (!lead.sizeIsTarget) {
     logger.info(
-      { empresa: lead.nomeFantasia || lead.razaoSocial, porte: lead.porte, capital: lead.capitalSocial },
-      "⏭️  Lead descartado (empresa grande, fora do alvo PME/MEI)",
+      {
+        empresa: lead.nomeFantasia || lead.razaoSocial,
+        porte: lead.porte,
+        capital: lead.capitalSocial,
+        motivo: lead.sizeReason,
+      },
+      "⏭️  Lead descartado (fora do alvo PME/MEI)",
     );
     return { lead, saved: null, filtered: true };
   }
@@ -479,7 +484,7 @@ function buildRoundSummary(leads, filtered = 0) {
     `📊 *Resumo da rodada*`,
     `Tier A: ${byTier.A} · Tier B: ${byTier.B} · Tier C: ${byTier.C}`,
     `Decisor confirmado: ${comDecisor}/${leads.length}`,
-    filtered ? `Descartadas por porte (grandes): ${filtered}` : null,
+    filtered ? `Descartadas por tamanho/porte: ${filtered}` : null,
     topLacunas.length ? `Maiores lacunas: ${topLacunas.join(", ")}` : null,
   ].filter(Boolean);
 
