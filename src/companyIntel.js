@@ -189,12 +189,23 @@ export function buildOutreachMessage(lead, segment) {
   const nome = lead.decisionMakerName ? lead.decisionMakerName.split(/\s+/)[0] : null;
   const empresa = lead.nomeFantasia || lead.razaoSocial;
   const local = lead.cidade ? ` em ${lead.cidade}` : "";
-  const profile = getNicheProfile(segment);
-  const dor = profile?.outreachPain || "operação, controle e rastreabilidade";
+  const hasDecisionMakerContact = Boolean(
+    lead.decisionMakerPhone ||
+      lead.decisionMakerWhatsapp ||
+      lead.decisionMakerEmail ||
+      lead.decisionMakerLinkedin ||
+      lead.decisionMakerInstagram,
+  );
 
-  const saudacao = nome ? `Olá, ${nome}.` : "Olá.";
+  if (nome && hasDecisionMakerContact) {
+    return `Oi, ${nome}. Tudo bem? Aqui é a Antonela, da Phosphorcode. Dei uma olhada rápida no trabalho de vocês e uma coisa me deixou curiosa. Posso te perguntar?`;
+  }
 
-  return `${saudacao} Vi a ${empresa}${local}. Pode haver espaço para ganhar controle em ${dor}. A Phosphorcode cria sistemas sob medida para empresas que cresceram mais rápido que os processos. Posso te mandar uma ideia rápida?`;
+  if (nome) {
+    return `Oi, ${nome}. Tudo bem? Aqui é a Antonela, da Phosphorcode. Dei uma olhada rápida no trabalho de vocês e uma coisa me deixou curiosa. Posso te perguntar?`;
+  }
+
+  return `Oi, tudo bem? Aqui é a Antonela, da Phosphorcode. Dei uma olhada rápida no trabalho de vocês e uma coisa me deixou curiosa. Você sabe quem seria a pessoa certa para eu perguntar?`;
 }
 
 // ── Compara dois nomes de forma tolerante (case/acento/ordem de palavras) pra
@@ -583,8 +594,8 @@ export function formatLeadCard(lead) {
 
   sections.push([
     lead.suggestedMessage
-      ? `💬 *Sugestão de abordagem:*\n${lead.suggestedMessage}`
-      : `ℹ️ Dados públicos insuficientes pra sugerir uma abordagem ainda.`,
+      ? `💬 *Mensagem inicial sugerida:*\n${lead.suggestedMessage}`
+      : `ℹ️ Dados públicos insuficientes pra montar mensagem inicial ainda.`,
   ]);
 
   return sections
