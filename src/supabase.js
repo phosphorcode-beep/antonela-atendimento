@@ -147,6 +147,7 @@ export async function upsertCompanyLead(lead) {
     decision_maker_linkedin: lead.decisionMakerLinkedin,
     decision_maker_instagram: lead.decisionMakerInstagram,
     decision_maker_contact_sources: lead.decisionMakerContactSources ?? null,
+    decision_maker_contact_layers: lead.decisionMakerContactLayers ?? null,
     fit_score: lead.fitScore,
     suggested_message: lead.suggestedMessage,
     source: lead.source,

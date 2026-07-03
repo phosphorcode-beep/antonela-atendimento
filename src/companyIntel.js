@@ -558,6 +558,7 @@ export function formatLeadCard(lead) {
       lead.decisionMakerEmail ? `✉️ *E-mail do decisor:* ${lead.decisionMakerEmail}` : null,
       lead.decisionMakerLinkedin ? `💼 *LinkedIn do decisor:* ${lead.decisionMakerLinkedin}` : null,
       lead.decisionMakerInstagram ? `📸 *Instagram do decisor:* @${lead.decisionMakerInstagram}` : null,
+      hasDecisionMakerContact && lead.decisionMakerContactLayers?.length ? `🧭 *Camadas:* ${lead.decisionMakerContactLayers.join(", ")}` : null,
       lead.telefone && !hasDecisionMakerContact ? `📱 *Fallback empresarial:* ${lead.telefone}` : null,
       lead.email && !hasDecisionMakerContact ? `✉️ *E-mail empresarial:* ${lead.email}` : null,
       lead.website && !hasDecisionMakerContact ? `🔗 *Site:* ${lead.website}` : null,

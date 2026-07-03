@@ -6,4 +6,5 @@ alter table company_leads
   add column if not exists decision_maker_whatsapp text,
   add column if not exists decision_maker_linkedin text,
   add column if not exists decision_maker_instagram text,
-  add column if not exists decision_maker_contact_sources jsonb;
+  add column if not exists decision_maker_contact_sources jsonb,
+  add column if not exists decision_maker_contact_layers jsonb;
