@@ -182,7 +182,9 @@ export async function markCompanyOutreachError(id, errorMessage) {
   const { error } = await db
     .from(COMPANY_TABLE)
     .update({
+      outreach_status: "error",
       outreach_error: String(errorMessage || "").slice(0, 500),
+      next_outreach_at: null,
       updated_at: new Date().toISOString(),
     })
     .eq("id", id);

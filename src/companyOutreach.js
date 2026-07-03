@@ -152,6 +152,11 @@ function nextStatus(touchCountAfterSend) {
   return `contacted_${touchCountAfterSend}`;
 }
 
+function isMissingWhatsAppNumberError(err) {
+  const message = err?.message || "";
+  return /exists"?\s*:\s*false/i.test(message) || /not\s+exists?/i.test(message);
+}
+
 function itemLabel(lead, extra = null) {
   const decisor = lead.decision_maker_name ? ` (${lead.decision_maker_name})` : "";
   return `• ${companyName(lead)}${decisor}${extra ? ` — ${extra}` : ""}`;
@@ -242,6 +247,18 @@ export async function runCompanyOutreachTick({ force = false } = {}) {
       sentLeads.push({ lead, phone });
       logger.info({ phone, company: companyName(lead), touchCount, status }, "📤 Company lead contatado");
     } catch (err) {
+      if (isMissingWhatsAppNumberError(err)) {
+        if (socials.instagram || socials.linkedin) {
+          await markCompanyOutreachManual(lead.id, "WhatsApp não encontrado; prospectar por rede social");
+          manualLeads.push(lead);
+        } else {
+          await markCompanyOutreachBlocked(lead.id, "WhatsApp não encontrado e sem rede social acionável");
+          blockedLeads.push({ lead, reason: "WhatsApp não encontrado" });
+        }
+        logger.warn({ err, phone, company: companyName(lead) }, "⚠️ Número sem WhatsApp para company_lead");
+        continue;
+      }
+
       await markCompanyOutreachError(lead.id, err.message);
       errorLeads.push({ lead, error: err.message });
       logger.error({ err, phone, company: companyName(lead) }, "❌ Falha no disparo para company_lead");
